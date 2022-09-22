@@ -1,0 +1,308 @@
+.Dd September 22, 2022
+.Dt CTRLMENU 1
+.Os
+.Sh NAME
+.Nm ctrlmenu
+.Nd unified menu system for X11
+.Sh SYNOPSIS
+.Nm  ctrlmenu
+.Op Fl it
+.Op Fl a Ar keysym
+.Op Fl r Ar keychord
+.Op Ar file
+.Sh DESCRIPTION
+.Nm
+reads a text file describing entries in a hierarchical menu,
+and creates input methods for selecting and entering those entries.
+When an entry is selected, its respective command is run in a subshell.
+.Pp
+The options are as follows
+.Bl -tag -width Ds
+.It Fl a Ar keysym
+The symbol for the alt key (none by default).
+Despite its name, this key can be any key.
+.It Fl i
+Ignore case on the runner.
+.It Fl t
+Enables tornoff menus.
+.It Fl r Ar keychord
+The keychord to invoke the runner (A-space, by default).
+The keychord must be a keysym, prefixed with
+.Sy C-
+(for Control),
+.Sy S-
+(for Shift),
+.Sy A-
+(for Alt),
+.Sy W-
+(for Super/Win).
+.El
+.Pp
+Each line read from the specified file or stdin can be a separator,
+a terminal entry, a common meta-entry, or a pipe meta-entry.
+Any blank around an entry is ignored
+.Pp
+.Bd -literal -offset indent
+<ENTRY>     := <SEPARATOR> | <TERMINAL> | <META> | <PIPE>
+<SEPARATOR> := "--\en"
+<TERMINAL>  := <NAME> ["[" <KEYCHORD> "]"] ["--" <COMMAND>] "\en"
+<META>      := <NAME> "{\en" <ENTRIES>... "}\en"
+<PIPE>      := <NAME> "--" <COMMAND> "{\en" <SCRIPT> "}\en"
+.Ed
+.Pp
+.Bl -tag -width Ds
+.It Separator
+A separator is an anonymous, non-selectable entry in the menu.
+Separators are composed by a line with only two dashes in it.
+.It Terminal Entry
+A terminal entry is a line composed by a name, an optional keychord
+between square braces, and an optional command after two dashes.
+.It Common Meta-Entry
+A common meta-entry is a line composed by a name followed by an open curly bracket,
+then a sequence of entries, followed by a close curly bracket.
+.It Pipe Meta-Entry
+A pipe meta-entry is a line composed by a name followed two dashes and a command.
+Then a shell script between curly braces.
+The given shell script is run and its output is read for generated menu entries.
+.El
+.Pp
+The name can have a underscore before the entry's alt character.
+.Pp
+A keychord has the following form.
+An
+.Dq "S-"
+prefix indicates that the
+.Ic "Shift"
+key modifier is active.
+An
+.Dq "C-"
+prefix indicates that the
+.Ic "Control"
+key modifier is active.
+An
+.Dq "A-"
+prefix indicates that the
+.Ic "Alt"
+key modifier is active.
+An
+.Dq "W-"
+prefix indicates that the
+.Ic "Super"
+(Also known as
+.Dq "windows key" )
+key modifier is active.
+The keysym that forms the ending of the keychord is one of the keysyms listed at
+the
+.Pa "/usr/X11R6/include/X11/keysymdef.h"
+file
+.Pq Pa "/usr/include/X11/keysymdef.h" No in some systems.
+.Bd -literal -offset indent
+<KEYCHORD>  := ("S-"|"C-"|"A-"|"W-")... <KEYSYM>
+.Ed
+.Sh USAGE
+The following input methods are provided by
+.Nm
+.Bl -tag -width Ds
+.It Menu Dockapp
+The menu dockapp is an always-visible dockapp window that displays a list of menus.
+The menus can be browsed with the mouse and each entry can then be clicked to be entered.
+After a menu is opened, they can be navigated using the arrow keys and the
+.Sy Tab Ns ,
+.Sy Esc Ns ,
+and
+.Sy Enter
+keys.
+.It Alt Key Sequences
+Each menu entry can be bound to a character.
+After pressing the alt key (set with the
+.Fl a
+command-line option),
+it is possible to navigate the menus by pressing the letters of entries in sequence.
+.It Accelerator key chords
+Each menu entry can be bound to a key chord.
+Pressing a key chord enters the entry bound to it.
+.It Runner
+The runner is a window that is visible after pressing the runner key chord
+.Ns ( Sy Alt + space Ns , by default).
+The runner displays a text input field where the user can type in a text to filter entries,
+and select an entry using
+.Sy Tab
+and
+.Sy Shift Tab Ns .
+When the user presses
+.Sy Return Ns ,
+the selected entry is entered.
+.El
+.Sh RESOURCES
+.Nm
+understands the following X resources.
+.Bl -tag -width Ds
+.It Ic "ctrlmenu.faceName"
+The typeface to write text with.
+.It Ic "ctrlmenu.runner.ignoreCase"
+If set to
+.Dq "True" ,
+ignores case on the runner.
+.It Ic "ctrlmenu.runner.keychord"
+The keychord to spawn the runner.
+.It Ic "ctrlmenu.runner.background"
+The background color of non-selected entries in the runner.
+.It Ic "ctrlmenu.runner.foreground"
+The color of the label text of non-selected entries in the runner.
+.It Ic "ctrlmenu.runner.selbackground"
+The background color of selected entries in the runner.
+.It Ic "ctrlmenu.runner.selforeground"
+The color of the label text of selected entries in the runner.
+.It Ic "ctrlmenu.runner.altforeground"
+The color of the descriptive text of non-selected entries in the runner.
+.It Ic "ctrlmenu.runner.altselforeground"
+The color of the descriptive text of selected entries in the runner.
+.It Ic "ctrlmenu.menu.keysym"
+The keysym to show the alt characters on the menu.
+.It Ic "ctrlmenu.menu.tornoff"
+If set to
+.Dq "True" ,
+enable tornoff menus.
+.It Ic "ctrlmenu.menu.background"
+The background color of non-selected entries in the menus.
+.It Ic "ctrlmenu.menu.foreground"
+The color of the label text of non-selected entries in the menus.
+.It Ic "ctrlmenu.menu.selbackground"
+The background color of selected entries in the menus.
+.It Ic "ctrlmenu.menu.selforeground"
+The color of the label text of selected entries in the menus.
+.It Ic "ctrlmenu.menu.topShadow"
+The color of the top shadow around the menu
+.It Ic "ctrlmenu.menu.bottomShadow"
+The color of the bottom shadow around the menu.
+.It Ic "ctrlmenu.menu.shadowThickness"
+Thickness of the 3D shadow effect.
+.It Ic "ctrlmenu.menu.alignment"
+If set to
+.Sy "left" Ns ,
+.Sy "center" Ns ,
+or
+.Sy "right" Ns ,
+text is aligned to the left, center, or right of the menu, respectively.
+By default, text is aligned to the left.
+.El
+.Sh ENVIRONMENT
+
+The following environment variables affect the execution of
+.Nm Ns .
+.Bl -tag -width Ds
+.It DISPLAY
+The display to start
+.Nm
+on.
+.El
+.Sh EXAMPLE
+Consider the following input:
+.Bd -literal -offset indent
+_Apps {
+	Open _Terminal [A-T]               -- exec xterm
+	Take _Screenshot [A-S]             -- exec scrot
+	File _Browser                      -- exec thunar
+	--
+	_Seamonkey                         -- exec seamonkey
+	_Firefox                           -- exec firefox
+	_Chrome                            -- exec chrome
+	_HexChat                           -- exec hexchat
+	--
+	_Games {
+		_NetHack                   -- exec nethack-3.6.6
+		_Spider                    -- exec spider
+		Super Tux _Kart            -- exec supertuxkart
+		TES III Morro_wind         -- exec openmw
+	}
+}
+_Window {
+	Stic_k Container [A-S-S]           -- exec shodc state -y
+	S_hade Container [A-S-N]           -- exec shodc state -s
+	Minimi_ze Container [A-S-Z]        -- exec shodc state -m
+	_Maximize Container [A-S-W]        -- exec shodc state -M
+	Container _FullScreen [A-S-F]      -- exec shodc state -f
+	Container _Below [A-S-B]           -- exec shodc state -b
+	Container _Above [A-S-A]           -- exec shodc state -a
+	--
+	_Go To Desktop {
+		Go To Desktop _1 [A-1]     -- exec shodc goto 1
+		Go To Desktop _2 [A-2]     -- exec shodc goto 2
+		Go To Desktop _3 [A-3]     -- exec shodc goto 3
+		Go To Desktop _4 [A-4]     -- exec shodc goto 4
+		Go To Desktop _5 [A-5]     -- exec shodc goto 5
+	}
+	Move Container _To {
+		Move to Desktop _1 [A-S-1] -- exec shodc sendto 1
+		Move to Desktop _2 [A-S-2] -- exec shodc sendto 2
+		Move to Desktop _3 [A-S-3] -- exec shodc sendto 3
+		Move to Desktop _4 [A-S-4] -- exec shodc sendto 4
+		Move to Desktop _5 [A-S-5] -- exec shodc sendto 5
+	}
+	--
+	_Close Window [A-S-Q]              -- exec shodc close
+}
+.Ed
+.Pp
+This input creates a dockapp window with two buttons:
+.Dq "Apps"
+and
+.Dq "Window" .
+The underline on the names of those entries in the input file indicates that
+pressing the alt key (set with the
+.Fl a
+command-line option)
+underlines the letter
+.Dq "A"
+in
+.Dq "Apps"
+and the letter
+.Dq "W"
+in
+.Dq "Window"
+buttons, so pressing the key
+.Ic "A"
+or
+.Ic "W"
+opens the menus for the apps or window controlling.
+Each window can also be opened by clicking on those buttons.
+.Pp
+On the
+.Dq Apps
+menu, an entry called
+.Dq "Open Terminal"
+can be clicked to run
+.Ic "exec xterm"
+on a terminal.
+This entry can also be selected by the following methods:
+.Bl -bullet -compact
+.It
+Pressing
+.Ic "Alt-T"
+(the accelerator keychord).
+.It
+Pressing
+.Ic "T"
+(the alt key)
+when the menu is open.
+.It
+Typing
+"Open Terminal"
+(or any substring)
+after pressing
+.Ic "Alt-space"
+(or any other keychord set with the
+.Fl r
+command-line option)
+to open the runner.
+.El
+.Sh SEE ALSO
+.Xr shod 1
+.Sh BUGS
+.Nm
+is created to work with the
+.Xr shod 1
+window manager.
+Although it probably works on
+.Xr fvwm 1 ,
+support for other window managers is not planned.
