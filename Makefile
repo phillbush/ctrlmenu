@@ -19,7 +19,7 @@ ${PROG}: ${OBJS}
 	${CC} -o $@ ${OBJS} ${LIBS} ${LDFLAGS}
 
 .c.o:
-	${CC} ${INCS} ${CFLAGS} ${CPPFLAGS} -c $<
+	${CC} -D_GNU_SOURCE ${INCS} ${CFLAGS} ${CPPFLAGS} -c $<
 
 ${OBJS}: ctrlmenu.h
 
