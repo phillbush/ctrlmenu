@@ -674,7 +674,8 @@ run(struct Control *ctrl, struct ItemQueue *itemq)
 		case ButtonPress:
 			if (ev.xbutton.window != root || invalidbutton(&ev))
 				break;
-			if (menustate == STATE_NORMAL && (config.mode & MODE_CONTEXT) && ev.xbutton.button == Button3) {
+			if (menustate == STATE_NORMAL && (config.mode & MODE_CONTEXT) &&
+			    ev.xbutton.subwindow == None && ev.xbutton.button == Button3) {
 				initpopped(ctrl, NULL);
 				insertpopupmenu(
 					&ctrl->popupq,
