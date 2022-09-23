@@ -478,14 +478,18 @@ bindaccs(struct AcceleratorQueue *accq, KeyCode key, unsigned int mods)
 	}
 }
 
-static void
-scroll(struct Menu *menu, int menutype)
+static int
+scroll(struct Control *ctrl, Window win)
 {
+	struct Menu *menu;
 	struct Item *item;
+	int menutype;
 	int h, end;
 
+	if ((menu = GETOPENMENU(ctrl, win)) == NULL && (menu = GETROOTMENU(ctrl, win)) == NULL)
+		return 0;
 	end = h = SEPARATOR_HEIGHT;
-	if (menutype == MENU_POPUP) {
+	if ((menutype = getmenutype(ctrl, menu)) == MENU_POPUP) {
 		h += config.shadowThickness + TORNOFF_HEIGHT;
 		end += config.shadowThickness;
 	}
@@ -502,12 +506,17 @@ scroll(struct Menu *menu, int menutype)
 			menu->first = TAILQ_NEXT(menu->first, entries);
 			drawmenu(menu, menutype, 0);
 			XFlush(dpy);
+		} else {
+			return 0;
 		}
 	} else if (TAILQ_PREV(menu->first, ItemQueue, entries) != NULL) {
 		menu->first = TAILQ_PREV(menu->first, ItemQueue, entries);
 		drawmenu(menu, menutype, 0);
 		XFlush(dpy);
+	} else {
+		return 0;
 	}
+	return 1;
 }
 
 static void
@@ -611,11 +620,11 @@ getaltitem(struct Menu *menu, KeySym ksym, int menutype, int *ytop)
 static void
 run(struct Control *ctrl, struct ItemQueue *itemq)
 {
-	struct Menu *menu, *scrollmenu, *rootmenu;
+	struct Menu *menu, *rootmenu;
 	struct Item *item;
 	struct pollfd pfd;
 	KeySym ksym;
-	Window win;
+	Window win, scrollwin;
 	XEvent ev;
 	int promptopen;         /* either 1 (prompt open) or 0 (prompt closer) */
 	int menustate;          /* STATE_NORMAL, STATE_ALTPRESSED or STATE_POPUP */
@@ -635,18 +644,19 @@ run(struct Control *ctrl, struct ItemQueue *itemq)
 	pfd.events = POLLIN;
 	pfd.revents = POLLIN;
 	timeout = -1;
-	scrollmenu = NULL;
 	ret = 1;
 	ignorerelease = 0;
 	promptopen = 0;
 	menustate = STATE_NORMAL;
+	scrollwin = None;
 	do {
+		XPending(dpy);
 		if (ret == 0) {
-			if (scrollmenu != NULL) {
+			if (scroll(ctrl, scrollwin)) {
 				timeout = SCROLL_TIME;
-				scroll(scrollmenu, getmenutype(ctrl, scrollmenu));
 			} else {
 				timeout = -1;
+				scrollwin = None;
 			}
 			continue;
 		}
@@ -716,12 +726,11 @@ run(struct Control *ctrl, struct ItemQueue *itemq)
 			item = getitem(menu, getmenutype(ctrl, menu), pos, &ytop);
 			type = getmenutype(ctrl, menu);
 			timeout = -1;
-			scrollmenu = NULL;
 			if (item == NULL)
 				break;
 			if (item == &scrollup || item == &scrolldown) {
+				scrollwin = win;
 				menu->selected = item;
-				scrollmenu = menu;
 				timeout = SCROLL_WAIT;
 				drawmenu(menu, type, 0);
 				break;
@@ -861,7 +870,7 @@ selectitem:
 		}
 		XAllowEvents(dpy, AsyncKeyboard, CurrentTime);
 		XAllowEvents(dpy, ReplayPointer, CurrentTime);
-	} while (XPending(dpy) || (ret = poll(&pfd, 1, timeout)) != -1);
+	} while ((ret = poll(&pfd, 1, timeout)) != -1);
 	XAllowEvents(dpy, AsyncKeyboard, CurrentTime);
 	XAllowEvents(dpy, ReplayPointer, CurrentTime);
 }
