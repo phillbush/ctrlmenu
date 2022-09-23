@@ -650,7 +650,6 @@ run(struct Control *ctrl, struct ItemQueue *itemq)
 	menustate = STATE_NORMAL;
 	scrollwin = None;
 	do {
-		XPending(dpy);
 		if (ret == 0) {
 			if (scroll(ctrl, scrollwin)) {
 				timeout = SCROLL_TIME;
@@ -663,6 +662,7 @@ run(struct Control *ctrl, struct ItemQueue *itemq)
 		ret = 1;
 		if (!(pfd.revents & POLLIN))
 			continue;
+nextevent:
 		XNextEvent(dpy, &ev);
 		if (XFilterEvent(&ev, None))
 			continue;
@@ -870,6 +870,9 @@ selectitem:
 		}
 		XAllowEvents(dpy, AsyncKeyboard, CurrentTime);
 		XAllowEvents(dpy, ReplayPointer, CurrentTime);
+		if (XPending(dpy)) {
+			goto nextevent;
+		}
 	} while ((ret = poll(&pfd, 1, timeout)) != -1);
 	XAllowEvents(dpy, AsyncKeyboard, CurrentTime);
 	XAllowEvents(dpy, ReplayPointer, CurrentTime);
