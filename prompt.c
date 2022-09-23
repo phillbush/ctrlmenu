@@ -25,7 +25,7 @@ struct Undo {
 };
 
 struct Prompt {
-	int inited;                     /* whether prompt is in use */
+	int *inited;                     /* whether prompt is in use */
 
 	/* input field */
 	char text[INPUTSIZ];            /* input field text */
@@ -654,7 +654,7 @@ cleanundo(struct Prompt *prompt)
 }
 
 void *
-setprompt(struct ItemQueue *itemq, Window *win)
+setprompt(struct ItemQueue *itemq, Window *win, int *inited)
 {
 	XICCallback start, done, draw, caret, destroy;
 	XVaNestedList preedit = NULL;
@@ -667,6 +667,7 @@ setprompt(struct ItemQueue *itemq, Window *win)
 
 	prompt = emalloc(sizeof(*prompt));
 	*prompt = (struct Prompt){
+		.inited = inited,
 		.ictext = NULL,
 		.textsize = INPUTSIZ,
 		.cursor = 0,
@@ -761,12 +762,12 @@ mapprompt(struct Prompt *prompt)
 {
 	struct Item *item;
 
-	if (prompt->inited)
+	if (*prompt->inited)
 		return;
 	prompt->text[0] = '\0';
 	prompt->cursor = 0;
 	prompt->select = 0;
-	prompt->inited = 1;
+	*prompt->inited = 1;
 	initundo(prompt);
 	TAILQ_INIT(&prompt->deferq);
 	getgenerators(prompt, prompt->itemq);
@@ -785,9 +786,9 @@ unmapprompt(struct Prompt *prompt)
 {
 	struct Item *item;
 
-	if (!prompt->inited)
+	if (!(*prompt->inited))
 		return;
-	prompt->inited = 0;
+	*prompt->inited = 0;
 	XUnmapWindow(dpy, prompt->win);
 	cleanundo(prompt);
 	free(prompt->ictext);

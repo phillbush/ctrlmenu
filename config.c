@@ -33,4 +33,6 @@ struct Config config = {
 
 	.runner                 = "A-space",
 	.altkey                 = "",
+
+	.mode                   = 0,
 };

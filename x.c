@@ -51,6 +51,25 @@ getresources(XrmDatabase xdb)
 	if (XrmGetResource(xdb, "ctrlmenu.faceName", "*", &type, &xval) == True)
 		config.faceName = xval.addr;
 
+	if (XrmGetResource(xdb, "ctrlmenu.menu.dockapp", "*", &type, &xval) == True) {
+		if (strcasecmp(xval.addr, "true") == 0 ||
+		    strcasecmp(xval.addr, "on") == 0 ||
+		    strcasecmp(xval.addr, "1") == 0) {
+			config.mode |= MODE_DOCKAPP;
+		} else {
+			config.mode &= ~MODE_DOCKAPP;
+		}
+	}
+	if (XrmGetResource(xdb, "ctrlmenu.menu.context", "*", &type, &xval) == True) {
+		if (strcasecmp(xval.addr, "true") == 0 ||
+		    strcasecmp(xval.addr, "on") == 0 ||
+		    strcasecmp(xval.addr, "1") == 0) {
+			config.mode |= MODE_CONTEXT;
+		} else {
+			config.mode &= ~MODE_CONTEXT;
+		}
+	}
+
 	if (XrmGetResource(xdb, "ctrlmenu.menu.tornoff", "*", &type, &xval) == True) {
 		if (strcasecmp(xval.addr, "true") == 0 ||
 		    strcasecmp(xval.addr, "on") == 0 ||
@@ -467,7 +486,7 @@ grabkey(KeyCode key, unsigned int mods)
 }
 
 void
-grabsync(KeyCode key)
+grabkeysync(KeyCode key)
 {
 	XGrabKey(
 		dpy,
@@ -477,6 +496,23 @@ grabsync(KeyCode key)
 		False,
 		GrabModeAsync,
 		GrabModeSync
+	);
+}
+
+void
+grabbuttonsync(unsigned int button)
+{
+	XGrabButton(
+		dpy,
+		button,
+		AnyModifier,
+		root,
+		False,
+		ButtonPressMask,
+		GrabModeSync,
+		GrabModeAsync,
+		None,
+		None
 	);
 }
 
@@ -498,14 +534,16 @@ ungrab(void)
 }
 
 void
-translatecoordinates(Window win, XRectangle *rect)
+translatecoordinates(Window win, short *xret, short *yret)
 {
 	Window dw;
 	int x, y;
 
+	if (win == root)
+		return;
 	XTranslateCoordinates(dpy, win, root, 0, 0, &x, &y, &dw);
-	rect->x = x;
-	rect->y = y;
+	*xret = x;
+	*yret = y;
 }
 
 void

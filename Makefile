@@ -39,4 +39,7 @@ uninstall:
 	rm ${DESTDIR}${PREFIX}/bin/${PROG}
 	rm ${DESTDIR}${MANPREFIX}/man1/${PROG}.1
 
+README.md: ${PROG}.1
+	mandoc -Tmarkdown -l ./${PROG}.1 >README.md
+
 .PHONY: all tags clean install uninstall

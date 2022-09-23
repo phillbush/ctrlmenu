@@ -1,4 +1,4 @@
-.Dd September 22, 2022
+.Dd September 23, 2022
 .Dt CTRLMENU 1
 .Os
 .Sh NAME
@@ -6,7 +6,7 @@
 .Nd unified menu system for X11
 .Sh SYNOPSIS
 .Nm  ctrlmenu
-.Op Fl it
+.Op Fl cdit
 .Op Fl a Ar keysym
 .Op Fl r Ar keychord
 .Op Ar file
@@ -21,6 +21,10 @@ The options are as follows
 .It Fl a Ar keysym
 The symbol for the alt key (none by default).
 Despite its name, this key can be any key.
+.It Fl c
+Show a context menu when right-clicking the desktop.
+.It Fl d
+Show a docked menu on the window manager's dock.
 .It Fl i
 Ignore case on the runner.
 .It Fl t
@@ -103,15 +107,23 @@ file
 The following input methods are provided by
 .Nm
 .Bl -tag -width Ds
-.It Menu Dockapp
-The menu dockapp is an always-visible dockapp window that displays a list of menus.
-The menus can be browsed with the mouse and each entry can then be clicked to be entered.
-After a menu is opened, they can be navigated using the arrow keys and the
-.Sy Tab Ns ,
-.Sy Esc Ns ,
-and
-.Sy Enter
-keys.
+.It Docked Menu
+The docked menu is an always-visible dockapp window that displays a list of menus
+on the window manager's dock.
+The docked menu is only displayed when using the
+.Fl d
+command-line option.
+.It Context Menu
+The context menu is a menu that pops up when the user right-clicks the desktop.
+The context menu is only displayed when using the
+.Fl c
+command-line option.
+.It Tornoff Menu
+A tornoff menu is a menu that appears as a regular window.
+A tornoff menu is created after selecting the dashed line at the top of a popped up menu.
+This dashed line only appears when using the
+.Fl t
+command-line option.
 .It Alt Key Sequences
 Each menu entry can be bound to a character.
 After pressing the alt key (set with the
@@ -133,6 +145,15 @@ When the user presses
 .Sy Return Ns ,
 the selected entry is entered.
 .El
+.Pp
+Any menu (either the docked menu, the context menu, a tornoff menu or a popped up menu)
+can be browsed with the mouse, and each entry can then be clicked to be selected.
+After a submenu is opened, they can be navigated using the arrow keys and the
+.Sy Tab Ns ,
+.Sy Esc Ns ,
+and
+.Sy Enter
+keys.
 .Sh RESOURCES
 .Nm
 understands the following X resources.
@@ -159,10 +180,27 @@ The color of the descriptive text of non-selected entries in the runner.
 The color of the descriptive text of selected entries in the runner.
 .It Ic "ctrlmenu.menu.keysym"
 The keysym to show the alt characters on the menu.
+.It Ic "ctrlmenu.menu.dockapp"
+If set to
+.Dq "True" ,
+enable the docked menu.
+This is equivalent to the
+.Fl d
+command-line option.
+.It Ic "ctrlmenu.menu.context"
+If set to
+.Dq "True" ,
+enable the context menu.
+This is equivalent to the
+.Fl c
+command-line option.
 .It Ic "ctrlmenu.menu.tornoff"
 If set to
 .Dq "True" ,
 enable tornoff menus.
+This is equivalent to the
+.Fl t
+command-line option.
 .It Ic "ctrlmenu.menu.background"
 The background color of non-selected entries in the menus.
 .It Ic "ctrlmenu.menu.foreground"

@@ -21,6 +21,11 @@ struct Control;
 struct Prompt;
 
 enum {
+	MODE_DOCKAPP    = 0x1,
+	MODE_CONTEXT    = 0x2,
+};
+
+enum {
 	GRAB_POINTER    = 0x1,
 	GRAB_KEYBOARD   = 0x2,
 };
@@ -171,6 +176,7 @@ struct Config {
 	int alignment;
 	int triangle_width;
 	int triangle_height;
+	int mode;
 };
 
 struct DC {
@@ -234,10 +240,11 @@ void ungrab(void);
 void freepixmap(Pixmap pix);
 void mapwin(Window win);
 void unmapwin(Window win);
-void grabsync(KeyCode key);
+void grabkeysync(KeyCode key);
+void grabbuttonsync(unsigned int button);
 int grab(int grabwhat);
 int textwidth(const char *text, int len);
-void translatecoordinates(Window win, XRectangle *rect);
+void translatecoordinates(Window win, short *x, short *y);
 XRectangle getselmon(XRectangle *rect);
 Window createwindow(XRectangle *rect, int type, const char *title);
 Pixmap createpixmap(XRectangle rect, Window win);
@@ -246,7 +253,7 @@ KeyCode getkeycode(const char *str);
 /* runner.c */
 int getoperation(struct Prompt *prompt, XKeyEvent *ev, char *buf, size_t bufsize, KeySym *ksym, int *len);
 KeySym getkeysym(const char *str);
-void *setprompt(struct ItemQueue *itemq, Window *win);
+void *setprompt(struct ItemQueue *itemq, Window *win, int *state);
 void mapprompt(struct Prompt *prompt);
 void unmapprompt(struct Prompt *prompt);
 void drawprompt(struct Prompt *prompt);

@@ -47,6 +47,7 @@ struct ParseData {
 	/* the token itself */
 	int toktype;
 	char *toktext;
+	char *alt;
 	size_t toksize;
 };
 
@@ -76,6 +77,7 @@ readtok(struct ParseData *parse, int isname)
 	eot = 0;
 	i = 0;
 	nread = 1;
+	parse->alt = NULL;
 	while (!eot) {
 		while (isblank((unsigned char)parse->bufdata[parse->bufindex]))
 			parse->bufindex++;
@@ -93,7 +95,7 @@ readtok(struct ParseData *parse, int isname)
 				parse->toktext[i] = '\0';
 				eot = 1;
 				break;
-			} else if (strchr("\n", parse->bufdata[parse->bufindex]) != NULL) {
+			} else if (parse->bufdata[parse->bufindex] == '\n') {
 				parse->toktext[i] = '\0';
 				eot = 1;
 				break;
@@ -101,7 +103,14 @@ readtok(struct ParseData *parse, int isname)
 				parse->toktext[i] = '\0';
 				eot = 1;
 				break;
-			} else if (parse->bufdata[parse->bufindex] == '\\') {
+			} else if (isname && parse->bufdata[parse->bufindex] == '_' &&
+			           parse->bufdata[parse->bufindex + 1] != '\n' &&
+			           parse->bufdata[parse->bufindex + 1] != '\0') {
+				parse->alt = parse->toktext + i;
+				parse->toktext[i++] = parse->bufdata[++parse->bufindex];
+			} else if (parse->bufdata[parse->bufindex] == '\\' &&
+			           parse->bufdata[parse->bufindex + 1] != '\n' &&
+			           parse->bufdata[parse->bufindex + 1] != '\0') {
 				switch (parse->bufdata[++parse->bufindex]) {
 				case 'a':
 					parse->toktext[i++] = '\a';
@@ -283,26 +292,22 @@ setaltkey(struct ParseData *parse, struct Item *item)
 	static const unsigned char utfbyte[] = {0x80, 0x00, 0xC0, 0xE0, 0xF0};
 	static const unsigned char utfmask[] = {0xC0, 0x80, 0xE0, 0xF0, 0xF8};
 	char buf[KSYMBUF];
-	char *s;
 	size_t i, n;
 
-	if ((s = strchr(parse->toktext, '_')) != NULL) {
+	if (parse->alt != NULL) {
 		/* read alt sequence */
-		s++;
-		n = 0;
-		for (i = 0; i < UTFMAX; i++) {
-			if (((unsigned char)*s & utfmask[i]) == utfbyte[i]) {
+		for (i = n = 0; i < UTFMAX; i++) {
+			if (((unsigned char)parse->alt[n] & utfmask[i]) == utfbyte[i]) {
 				n++;
 				break;
 			}
 		}
 		if (n < KSYMBUF - 1 && n > 0 && i < UTFMAX) {
-			memcpy(buf, s, n);
+			memcpy(buf, parse->alt, n);
 			buf[n] = '\0';
-			item->altpos = s - parse->toktext - 1;
+			item->altpos = parse->alt - parse->toktext;
 			item->altlen = n;
 			item->altkeysym = getkeysym(buf);
-			memmove(s - 1, s, strlen(s) + 1);
 		}
 	}
 }
@@ -569,6 +574,7 @@ readpipe(struct ItemQueue *itemq, struct Item *caller)
 		.toktype = TOK_NONE,
 		.toktext = NULL,
 		.toksize = 0,
+		.alt = NULL,
 	};
 	parselistonce(&parse, itemq, caller);
 	fclose(fp);
@@ -631,6 +637,7 @@ readfile(FILE *fp, char *filename, struct ItemQueue *itemq, struct AcceleratorQu
 
 		.toktype = TOK_NONE,
 		.toktext = NULL,
+		.alt = NULL,
 		.toksize = 0,
 	};
 	TAILQ_INIT(accq);
