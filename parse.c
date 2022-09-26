@@ -1,3 +1,5 @@
+#include <sys/wait.h>
+
 #include <err.h>
 #include <ctype.h>
 #include <stdio.h>
@@ -579,6 +581,7 @@ readpipe(struct ItemQueue *itemq, struct Item *caller)
 	parselistonce(&parse, itemq, caller);
 	fclose(fp);
 	free(parse.toktext);
+	wait(NULL);
 	if (parse.error) {
 		cleanitems(itemq);
 	}
