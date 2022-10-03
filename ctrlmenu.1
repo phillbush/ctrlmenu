@@ -1,36 +1,78 @@
-.Dd September 23, 2022
+.Dd September 28, 2022
 .Dt CTRLMENU 1
 .Os
 .Sh NAME
 .Nm ctrlmenu
 .Nd unified menu system for X11
 .Sh SYNOPSIS
-.Nm  ctrlmenu
-.Op Fl cdit
+.Nm
+.Op Fl detr
 .Op Fl a Ar keysym
-.Op Fl r Ar keychord
+.Op Fl T Ar format
+.Op Fl R Ar keychord
+.Op Fl p Ar position
+.Op Fl x Ar buttonchord
 .Op Ar file
 .Sh DESCRIPTION
 .Nm
-reads a text file describing entries in a hierarchical menu,
+is a launcher and menu system for X.
+It reads a text file describing entries in a hierarchical menu,
 and creates input methods for selecting and entering those entries.
-When an entry is selected, its respective command is run in a subshell.
+When an entry is selected, its respective command is printed to stdout.
+.Pp
+If no
+.Ar file
+argument is given, or if it is a hyphen
+.Dq "\-" ,
+.Nm
+reads from standard input.
 .Pp
 The options are as follows
 .Bl -tag -width Ds
 .It Fl a Ar keysym
-The symbol for the alt key (none by default).
+Enable the altkey input.
+The argument
+.Ar keysym
+must be the key symbol for the alt key (none by default).
 Despite its name, this key can be any key.
-.It Fl c
-Show a context menu when right-clicking the desktop.
 .It Fl d
-Show a docked menu on the window manager's dock.
-.It Fl i
-Ignore case on the runner.
+Enable the dockapp.
+This option makes
+.Dn
+show a docked menu on the window manager's dock.
+.It Fl e
+Instead of printing the selected entry to standard output,
+run it on "sh".
+.It Fl T Ar format
+This option specifies the format of the content to be passed to the
+.Ev RUNNER
+program.
+Its value is a comma-separated list of formatting options.
+Only two formatting options are supported:
+.Dq Ic "tsv"
+and
+.Dq Ic "group" .
+The
+.Dq Ic "tsv"
+format outputs to the runner tab-separated entries, one per line;
+the first field is the entry name, the second is its description, and the third is the entry's command.
+The
+.Dq Ic "group"
+format outputs to the runner entries grouped in blocks separated with blank lines.
+Each block has entries belonging to the same submenu, and begins with a line naming the menu itself.
+.Xr dmenu
 .It Fl t
-Enables tornoff menus.
-.It Fl r Ar keychord
-The keychord to invoke the runner (A-space, by default).
+Enable tornoff menus.
+This option can only be used together with
+.Fl d
+and/or
+.Fl x .
+.It Fl R Ar keychord
+The argument
+.Ar keychord
+must be the keychord to invoke the runner
+.Ns ( Cm "A\-space" ,
+by default).
 The keychord must be a keysym, prefixed with
 .Sy C-
 (for Control),
@@ -40,18 +82,47 @@ The keychord must be a keysym, prefixed with
 (for Alt),
 .Sy W-
 (for Super/Win).
+.It Fl r
+Enable passing the entries to a runner.
+.It Fl x Ar buttonspec
+Enable root menu.
+This option makes
+.Nm
+show the menu when clicking on the desktop
+or clicking anywhere with a given modifier.
+The argument
+.Ar buttonspec
+must be an optional button number
+(or nothing for button 3, the right button),
+prefixed with
+.Sy "C\-"
+(for Control),
+.Sy "S\-"
+(for Shift),
+.Sy "A\-"
+(for Alt),
+.Sy "W\-"
+(for Super/Win),
+.Sy "N\-"
+(for no modifier, making any press spawn the menu),
+or nothing
+(for no modifier, making only presses to the root window spawn the menu).
+The button spec can be also suffixed with the letter
+.Sy "P"
+to indicate that the click to the root window should be passed to other clients.
 .El
 .Pp
 Each line read from the specified file or stdin can be a separator,
 a terminal entry, a common meta-entry, or a pipe meta-entry.
-Any blank around an entry is ignored
+Any blank around an entry is ignored.
+The format of an entry is as follows:
 .Pp
 .Bd -literal -offset indent
-<ENTRY>     := <SEPARATOR> | <TERMINAL> | <META> | <PIPE>
-<SEPARATOR> := "--\en"
-<TERMINAL>  := <NAME> ["[" <KEYCHORD> "]"] ["--" <COMMAND>] "\en"
-<META>      := <NAME> "{\en" <ENTRIES>... "}\en"
-<PIPE>      := <NAME> "--" <COMMAND> "{\en" <SCRIPT> "}\en"
+ENTRY       := SEPARATOR | TERMINAL | META | PIPE
+SEPARATOR   := "--\en"
+TERMINAL    := NAME ["--" COMMAND] "\en"
+META        := NAME "{\en" ENTRIES... "}\en"
+PIPE        := NAME "--" COMMAND "{\en" SCRIPT "}\en"
 .Ed
 .Pp
 .Bl -tag -width Ds
@@ -59,20 +130,60 @@ Any blank around an entry is ignored
 A separator is an anonymous, non-selectable entry in the menu.
 Separators are composed by a line with only two dashes in it.
 .It Terminal Entry
-A terminal entry is a line composed by a name, an optional keychord
-between square braces, and an optional command after two dashes.
+A terminal entry is a line composed by a name,
+and an optional command after two dashes.
+A terminal entry appears as an entry in the menu which,
+when selected, outputs its command
+(or its name, if the command is not provided).
+A terminal entry ends in a newline.
 .It Common Meta-Entry
 A common meta-entry is a line composed by a name followed by an open curly bracket,
-then a sequence of entries, followed by a close curly bracket.
+then a sequence of other entries, followed by a close curly bracket.
+A common meta-entry appears as an entry in the menu which,
+when selected, opens a submenu.
+A common meta-entry ends in a newline.
 .It Pipe Meta-Entry
 A pipe meta-entry is a line composed by a name followed two dashes and a command.
 Then a shell script between curly braces.
-The given shell script is run and its output is read for generated menu entries.
+A pipe meta-entry appears as an entry in the menu which,
+when selected, runs the corresponding shell script whose output is read for menu entries.
+Only terminal entries and separators can be read from the running script.
+A pipe meta-entry ends in a newline.
 .El
 .Pp
-The name can have a underscore before the entry's alt character.
+The name can end in a string between braces, which are used for extensions
+(the only extensions supported are keybinding, descriptions and icons).
+The format of a name is as follows:
 .Pp
-A keychord has the following form.
+.Bd -literal -offset indent
+NAME        := LABEL [ "[" LIST "]" ]
+LIST        := | EXTENSION ":" LIST
+EXTENSION   := KEYBINDING | ICON | DESCRIPTION
+ICON        := "#" PATH
+KEYBINDING  := "!" ("S-" | "C-" | "A-" | "W-") KEYSYM
+DESCRIPTION := STRING
+.Ed
+.Pp
+The
+.Sy LABEL
+is the string that will appear in the menu.
+The label can contain a underscore
+.Pq Dq "_"
+before a character to indicate that this character should be underlined
+on the menu, and that pressing the key corresponding to that character selecs the item.
+The extension list is a colon-separated list of extensions between braces.
+.Pp
+An icon is the path to a icon to be displayed in the menu before the label.
+The path must be prefixed with a
+.Dq "#"
+character to indicate that it is the path to an icon.
+.Pp
+A keybinding is a sequence of modifiers and a key symbol to be bound for the menu entry.
+The keybinding must be prefixed with a
+.Dq "!"
+character to indicate that it is a keybinding.
+When the corresponding key is pressed along with the given modifiers, the respective entry is selected.
+A keybinding has the following form.
 An
 .Dq "S-"
 prefix indicates that the
@@ -95,14 +206,14 @@ prefix indicates that the
 (Also known as
 .Dq "windows key" )
 key modifier is active.
-The keysym that forms the ending of the keychord is one of the keysyms listed at
+The keysym that forms the ending of the keybinding is one of the keysyms listed at
 the
 .Pa "/usr/X11R6/include/X11/keysymdef.h"
 file
 .Pq Pa "/usr/include/X11/keysymdef.h" No in some systems.
-.Bd -literal -offset indent
-<KEYCHORD>  := ("S-"|"C-"|"A-"|"W-")... <KEYSYM>
-.Ed
+.Pp
+The description is a comment for the item to be piped to the runner application.
+The description has no prefix and should be the last extension on the extension list.
 .Sh USAGE
 The following input methods are provided by
 .Nm
@@ -113,10 +224,13 @@ on the window manager's dock.
 The docked menu is only displayed when using the
 .Fl d
 command-line option.
+The docked menu only works on window managers that docks dockapps,
+such as
+.Xr fluxbox 1 .
 .It Context Menu
 The context menu is a menu that pops up when the user right-clicks the desktop.
 The context menu is only displayed when using the
-.Fl c
+.Fl x
 command-line option.
 .It Tornoff Menu
 A tornoff menu is a menu that appears as a regular window.
@@ -134,88 +248,90 @@ it is possible to navigate the menus by pressing the letters of entries in seque
 Each menu entry can be bound to a key chord.
 Pressing a key chord enters the entry bound to it.
 .It Runner
-The runner is a window that is visible after pressing the runner key chord
-.Ns ( Sy Alt + space Ns , by default).
-The runner displays a text input field where the user can type in a text to filter entries,
-and select an entry using
-.Sy Tab
-and
-.Sy Shift Tab Ns .
-When the user presses
-.Sy Return Ns ,
-the selected entry is entered.
+The runner is an interactive filter program (like
+.Xr dmenu 1
+or
+.Xr xprompt 1 )
+that lists and filters its input as the user types for an entry.
+A runner program can be invoked by
+.Nm
+by pressing a key chord specified with the
+.Fl R
+command-line option;
+and all menu entries will be given to the runner's stdin.
+The runner can only be invoked when using the
+.Fl r
+command-line option.
+The runner program is specified by the
+.Ev RUNNER
+environment variable.
+The format of the content to be passed to the runner is specified by the
+.Fl T
+command-line option.
 .El
 .Pp
 Any menu (either the docked menu, the context menu, a tornoff menu or a popped up menu)
 can be browsed with the mouse, and each entry can then be clicked to be selected.
-After a submenu is opened, they can be navigated using the arrow keys and the
-.Sy Tab Ns ,
-.Sy Esc Ns ,
-and
-.Sy Enter
-keys.
+After a submenu is opened, they can be navigated either using the mouse or one of the following keys:
+.Bl -tag -width Ds
+.It Ic "Home"
+Select the first item in the menu.
+.It Ic "End"
+Select the last item in the menu.
+.It Ic "Down, Tab"
+Cycle through the items in the regular direction.
+.It Ic "Up, Shift-Tab"
+Cycle through the items in the reverse direction.
+.It Ic "Right, Enter"
+Select the highlighted item.
+.It Ic "Left"
+Go to the parent menu.
+.It Ic "Esc"
+Close any open pop up menu.
+.El
 .Sh RESOURCES
 .Nm
 understands the following X resources.
 .Bl -tag -width Ds
 .It Ic "ctrlmenu.faceName"
 The typeface to write text with.
-.It Ic "ctrlmenu.runner.ignoreCase"
+.It Ic "ctrlmenu.itemHeight"
+The height in pixels of each item in the menus.
+Default is 24 pixels.
+.It Ic "ctrlmenu.iconSize"
+The size in pixels of the icon of items.
+Default is 16 pixels.
+.It Ic "ctrlmenu.igoreCase"
 If set to
-.Dq "True" ,
+.Dq "true" ,
 ignores case on the runner.
-.It Ic "ctrlmenu.runner.keychord"
-The keychord to spawn the runner.
-.It Ic "ctrlmenu.runner.background"
-The background color of non-selected entries in the runner.
-.It Ic "ctrlmenu.runner.foreground"
-The color of the label text of non-selected entries in the runner.
-.It Ic "ctrlmenu.runner.selbackground"
-The background color of selected entries in the runner.
-.It Ic "ctrlmenu.runner.selforeground"
-The color of the label text of selected entries in the runner.
-.It Ic "ctrlmenu.runner.altforeground"
-The color of the descriptive text of non-selected entries in the runner.
-.It Ic "ctrlmenu.runner.altselforeground"
-The color of the descriptive text of selected entries in the runner.
-.It Ic "ctrlmenu.menu.keysym"
-The keysym to show the alt characters on the menu.
-.It Ic "ctrlmenu.menu.dockapp"
-If set to
-.Dq "True" ,
-enable the docked menu.
-This is equivalent to the
-.Fl d
-command-line option.
-.It Ic "ctrlmenu.menu.context"
-If set to
-.Dq "True" ,
-enable the context menu.
-This is equivalent to the
-.Fl c
-command-line option.
-.It Ic "ctrlmenu.menu.tornoff"
-If set to
-.Dq "True" ,
-enable tornoff menus.
-This is equivalent to the
-.Fl t
-command-line option.
-.It Ic "ctrlmenu.menu.background"
+.It Ic "ctrlmenu.runnersize"
+The size of the runner.
+.It Ic "ctrlmenu.background"
 The background color of non-selected entries in the menus.
-.It Ic "ctrlmenu.menu.foreground"
+.It Ic "ctrlmenu.foreground"
 The color of the label text of non-selected entries in the menus.
-.It Ic "ctrlmenu.menu.selbackground"
+.It Ic "ctrlmenu.inputforeground"
+The color of the text in the input field.
+.It Ic "ctrlmenu.inputbackground"
+The color of the input field.
+.It Ic "ctrlmenu.altforeground"
+The color of the descriptive text of non-selected entries in the menus.
+.It Ic "ctrlmenu.altselforeground"
+The color of the descriptive text of selected entries in the menus.
+.It Ic "ctrlmenu.selbackground"
 The background color of selected entries in the menus.
-.It Ic "ctrlmenu.menu.selforeground"
+.It Ic "ctrlmenu.selforeground"
 The color of the label text of selected entries in the menus.
-.It Ic "ctrlmenu.menu.topShadow"
+.It Ic "ctrlmenu.topShadow"
 The color of the top shadow around the menu
-.It Ic "ctrlmenu.menu.bottomShadow"
+.It Ic "ctrlmenu.bottomShadow"
 The color of the bottom shadow around the menu.
-.It Ic "ctrlmenu.menu.shadowThickness"
+.It Ic "ctrlmenu.shadowThickness"
 Thickness of the 3D shadow effect.
-.It Ic "ctrlmenu.menu.alignment"
+.It Ic "ctrlmenu.gap"
+The gap, in pixels, between the menus.
+.It Ic "ctrlmenu.alignment"
 If set to
 .Sy "left" Ns ,
 .Sy "center" Ns ,
@@ -223,6 +339,17 @@ or
 .Sy "right" Ns ,
 text is aligned to the left, center, or right of the menu, respectively.
 By default, text is aligned to the left.
+.It Ic "ctrlmenu.maxItems"
+The maximum number of items to be displayed in a menu.
+If a menu has more items than that value,
+the menu will feature arrow buttons for scrolling.
+.It Ic "ctrlmenu.altKeysym"
+The key symbol to highlight the alt characters on the menu entries.
+.It Ic "ctrlmenu.runnerKeychord"
+The keybinding to open the runner program.
+Equivalent to the
+.Fl R
+command-line option.
 .El
 .Sh ENVIRONMENT
 
@@ -233,114 +360,95 @@ The following environment variables affect the execution of
 The display to start
 .Nm
 on.
+.It ICONPATH
+A colon-separated list of paths to look for icons.
+.It RUNNER
+The invocation of the runner program.
+The value of this environment variable defaults to
+.Dq Ic "dmenu -i" .
 .El
 .Sh EXAMPLE
-Consider the following input:
+Consider the following script:
 .Bd -literal -offset indent
-_Apps {
-	Open _Terminal [A-T]               -- exec xterm
-	Take _Screenshot [A-S]             -- exec scrot
-	File _Browser                      -- exec thunar
-	--
-	_Seamonkey                         -- exec seamonkey
-	_Firefox                           -- exec firefox
-	_Chrome                            -- exec chrome
-	_HexChat                           -- exec hexchat
-	--
-	_Games {
-		_NetHack                   -- exec nethack-3.6.6
-		_Spider                    -- exec spider
-		Super Tux _Kart            -- exec supertuxkart
-		TES III Morro_wind         -- exec openmw
-	}
+#!/bin/sh
+
+ctrlmenu -e -x "W-3" <<EOF
+_Applications {
+	_Web Browser [#./icons/web.png]  -- firefox
+	_Image Editor [#./icons/web.png] -- gimp
 }
-_Window {
-	Stic_k Container [A-S-S]           -- exec shodc state -y
-	S_hade Container [A-S-N]           -- exec shodc state -s
-	Minimi_ze Container [A-S-Z]        -- exec shodc state -m
-	_Maximize Container [A-S-W]        -- exec shodc state -M
-	Container _FullScreen [A-S-F]      -- exec shodc state -f
-	Container _Below [A-S-B]           -- exec shodc state -b
-	Container _Above [A-S-A]           -- exec shodc state -a
-	--
-	_Go To Desktop {
-		Go To Desktop _1 [A-1]     -- exec shodc goto 1
-		Go To Desktop _2 [A-2]     -- exec shodc goto 2
-		Go To Desktop _3 [A-3]     -- exec shodc goto 3
-		Go To Desktop _4 [A-4]     -- exec shodc goto 4
-		Go To Desktop _5 [A-5]     -- exec shodc goto 5
-	}
-	Move Container _To {
-		Move to Desktop _1 [A-S-1] -- exec shodc sendto 1
-		Move to Desktop _2 [A-S-2] -- exec shodc sendto 2
-		Move to Desktop _3 [A-S-3] -- exec shodc sendto 3
-		Move to Desktop _4 [A-S-4] -- exec shodc sendto 4
-		Move to Desktop _5 [A-S-5] -- exec shodc sendto 5
-	}
-	--
-	_Close Window [A-S-Q]              -- exec shodc close
+_Terminals {
+	Terminal (_xterm) [!A-T] -- xterm
+	Terminal (_urxvt) [!A-U] -- urxvt
+	Terminal (_st)    [!A-S] -- st
 }
+--
+_Users -- finger "\$@" {
+	sed 's/:.*//' /etc/passwd
+}
+_System {
+	_Shutdown  -- poweroff
+	_Reboot    -- reboot
+}
+EOF
 .Ed
 .Pp
-This input creates a dockapp window with two buttons:
-.Dq "Apps"
+In this example,
+.Nm
+is invoked with the
+.Fl e
+command-line option, which makes the command of the selected entry to be run in
+.Xr sh 1 .
+It is also invoked with the
+.Fl x Cm "W-3"
+command-line option, which makes the main menu pop up when right-clicking on the root window
+(ie', the desktop), or when right-clicking anywhere with the Win (Super) key.
+.Pp
+This example creates a menu with four entries:
+.Dq "Applications" ,
+.Dq "Terminal" ,
+.Dq "Users" ,
 and
-.Dq "Window" .
-The underline on the names of those entries in the input file indicates that
-pressing the alt key (set with the
-.Fl a
-command-line option)
-underlines the letter
-.Dq "A"
-in
-.Dq "Apps"
-and the letter
-.Dq "W"
-in
-.Dq "Window"
-buttons, so pressing the key
-.Ic "A"
-or
-.Ic "W"
-opens the menus for the apps or window controlling.
-Each window can also be opened by clicking on those buttons.
+.Dq "System" .
+The first two entries are separated from the last two with a separator.
+.Pp
+The underline on the names of those entries indicates that
+pressing the key corresponding to the character after the underline
+selects the item.
+For example, pressing
+.Dq "S"
+opens the
+.Dq "System"
+submenu,
+and then pressing
+.Dq "R"
+selects the
+.Dq "Reboot"
+entry.
 .Pp
 On the
-.Dq Apps
-menu, an entry called
-.Dq "Open Terminal"
-can be clicked to run
-.Ic "exec xterm"
-on a terminal.
-This entry can also be selected by the following methods:
-.Bl -bullet -compact
-.It
-Pressing
+.Dq Applications
+menu, the entries have icons specified between braces and after the
+.Dq "#"
+character.
+.Pp
+On the
+.Dq "Terminals"
+menu, the entries have keybindings specified between braces and after the
+.Dq "!"
+character.
+That means that, for example, pressing
 .Ic "Alt-T"
-(the accelerator keychord).
-.It
-Pressing
-.Ic "T"
-(the alt key)
-when the menu is open.
-.It
-Typing
-"Open Terminal"
-(or any substring)
-after pressing
-.Ic "Alt-space"
-(or any other keychord set with the
-.Fl r
-command-line option)
-to open the runner.
+opens
+.Xr xterm 1 .
+.Pp
+The
+.Dq "users"
+menu is a pipe meta-entry.
+Selecting it opens a menu whose entries are read from the
+.Xr sed 1
+command, which prints the user field of the
+.Pa "/etc/passwd"
+file.
+Selecting an entry in this menu fingers the corresponding user.
 .El
-.Sh SEE ALSO
-.Xr shod 1
-.Sh BUGS
-.Nm
-is created to work with the
-.Xr shod 1
-window manager.
-Although it probably works on
-.Xr fvwm 1 ,
-support for other window managers is not planned.

@@ -1,6 +1,6 @@
 PROG = ctrlmenu
-OBJS = ctrlmenu.o prompt.o config.o parse.o util.o x.o
-SRCS = ctrlmenu.c prompt.c config.c parse.c util.c x.c
+OBJS = ctrlmenu.o prompt.o parse.o util.o config.o
+SRCS = ctrlmenu.c prompt.c parse.c util.c config.c
 
 PREFIX ?= /usr/local
 MANPREFIX ?= ${PREFIX}/share/man
@@ -11,7 +11,7 @@ X11LIB ?= /usr/X11R6/lib
 
 # includes and libs
 INCS = -I${LOCALINC} -I${X11INC} -I/usr/include/freetype2 -I${X11INC}/freetype2
-LIBS = -L${LOCALLIB} -L${X11LIB} -lfontconfig -lXft -lX11 -lXinerama -lXrender -lXext -lImlib2
+LIBS = -L${LOCALLIB} -L${X11LIB} -lfontconfig -lXft -lX11 -lXinerama -lXrender -lXext -lXpm
 
 all: ${PROG}
 
@@ -38,8 +38,5 @@ install: all
 uninstall:
 	rm ${DESTDIR}${PREFIX}/bin/${PROG}
 	rm ${DESTDIR}${MANPREFIX}/man1/${PROG}.1
-
-README.md: ${PROG}.1
-	mandoc -Tmarkdown -l ./${PROG}.1 >README.md
 
 .PHONY: all tags clean install uninstall

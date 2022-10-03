@@ -110,6 +110,10 @@ readtok(struct ParseData *parse, int isname)
 			           parse->bufdata[parse->bufindex + 1] != '\0') {
 				parse->alt = parse->toktext + i;
 				parse->toktext[i++] = parse->bufdata[++parse->bufindex];
+			} else if (isname && strchr("[]", parse->bufdata[parse->bufindex]) != NULL) {
+				parse->toktext[i] = '\0';
+				eot = 1;
+				break;
 			} else if (parse->bufdata[parse->bufindex] == '\\' &&
 			           parse->bufdata[parse->bufindex + 1] != '\n' &&
 			           parse->bufdata[parse->bufindex + 1] != '\0') {
@@ -178,6 +182,12 @@ advance(struct ParseData *parse)
 		parse->bufindex++;
 	} else if (parse->bufdata[parse->bufindex] == '}') {
 		parse->toktype = TOK_CLOSECURLY;
+		parse->bufindex++;
+	} else if (parse->bufdata[parse->bufindex] == '[') {
+		parse->toktype = TOK_OPENSQUARE;
+		parse->bufindex++;
+	} else if (parse->bufdata[parse->bufindex] == ']') {
+		parse->toktype = TOK_CLOSESQUARE;
 		parse->bufindex++;
 	} else if (parse->bufdata[parse->bufindex] == '\n') {
 		parse->toktype = TOK_NEWLINE;
@@ -271,23 +281,6 @@ newaccelerator(char *str, unsigned int mods, struct Item *item)
 	return acc;
 }
 
-static int
-checkname(struct ParseData *parse, char **s)
-{
-	char *p;
-
-	if (*s <= parse->toktext) {
-		warnx("%s:%zu: parse error: empty item name", parse->filename, parse->lineno);
-		parse->error = 1;
-		return 1;
-	}
-	(*s)[0] = '\0';
-	for (p = *s - 1; p > parse->toktext && isblank(*(unsigned char *)p); p--)
-		*p = '\0';
-	(*s)++;
-	return 0;
-}
-
 static void
 setaltkey(struct ParseData *parse, struct Item *item)
 {
@@ -309,68 +302,79 @@ setaltkey(struct ParseData *parse, struct Item *item)
 			buf[n] = '\0';
 			item->altpos = parse->alt - parse->toktext;
 			item->altlen = n;
-			item->altkeysym = getkeysym(buf);
+			item->altkey = getkeycode(buf);
 		}
 	}
 }
 
 static void
-setdescription(struct ParseData *parse, struct Item *item)
+parsename(struct ParseData *parse, struct Item *item)
 {
-	char *s;
-
-	if ((s = strchr(parse->toktext, ':')) != NULL) {
-		/* read description */
-		if (checkname(parse, &s))
-			return;
-		item->desc = estrdup(s);
-	}
-}
-
-static void
-parsefullname(struct ParseData *parse, struct Item *item, struct AcceleratorQueue *accq)
-{
-	struct Accelerator *acc;
-	size_t n;
-	unsigned int mods;
-	char *s;
-
 	consume(parse, TOK_NAME);
 	setaltkey(parse, item);
-	if ((s = strchr(parse->toktext, '[')) != NULL) {
-		/* read accelerator keychord */
-		if (checkname(parse, &s))
-			return;
-		n = strcspn(s, "]");
-		if (s[n] != ']' || s[n + 1] != '\0') {
-			warnx("%s:%zu: parse error: unmatching square braces", parse->filename, parse->lineno);
-			parse->error = 1;
-			return;
+	item->name = estrdup(parse->toktext);
+	item->len = strlen(item->name);
+}
+
+static void
+parsebraces(struct ParseData *parse, struct Item *item, struct AcceleratorQueue *accq)
+{
+	struct Accelerator *acc;
+	size_t len;
+	unsigned int mods;
+	char *file, *accstr, *desc, *p;
+
+	file = NULL;
+	desc = NULL;
+	accstr = NULL;
+	consume(parse, TOK_NAME);
+	for (p = strtok(parse->toktext, ":");
+	     p != NULL;
+	     p = strtok(NULL, ":")) {
+		while (isblank((unsigned char)p[0]))
+			p++;
+		if (*p == '#') {
+			file = p + 1;
+		} else if (*p == '!') {
+			accstr = p + 1;
+		} else {
+			desc = p;
+			break;
 		}
-		s[n] = '\0';
+	}
+	if (accq != NULL && accstr != NULL) {
 		mods = 0;
-		item->acc = estrdup(s);
-		while (s[0] != '\0' && s[1] == '-') {
-			switch (s[0]) {
+		item->acc = estrdup(accstr);
+		while (accstr[0] != '\0' && accstr[1] == '-') {
+			switch (accstr[0]) {
 			case 'S': mods |= ShiftMask;    break;
 			case 'C': mods |= ControlMask;  break;
 			case 'A': mods |= Mod1Mask;     break;
 			case 'W': mods |= Mod4Mask;     break;
 			default:
-				warnx("%s:%zu: parse error: unknown modifier \"%c-\"", parse->filename, parse->lineno, s[0]);
+				warnx("%s:%zu: parse error: unknown modifier \"%c-\"", parse->filename, parse->lineno, accstr[0]);
 				parse->error = 1;
 				return;
 			}
-			s += 2;
+			accstr += 2;
 		}
 		if (accq != NULL) {
-			acc = newaccelerator(s, mods, item);
+			acc = newaccelerator(accstr, mods, item);
 			TAILQ_INSERT_HEAD(accq, acc, entries);
 		}
 	}
-	setdescription(parse, item);
-	item->name = estrdup(parse->toktext);
-	item->len = strlen(item->name);
+	if (file != NULL) {
+		len = strlen(file);
+		while (len > 0 && isblank((unsigned char)file[len-1]))
+			len--;
+		item->file = estrndup(file, len);
+	}
+	if (desc != NULL) {
+		len = strlen(desc);
+		while (len > 0 && isblank((unsigned char)desc[len-1]))
+			len--;
+		item->desc = estrndup(desc, len);
+	}
 }
 
 static char *
@@ -428,10 +432,13 @@ parseitemrec(struct ParseData *parse, struct Item *parent, struct AcceleratorQue
 		.cmd = NULL,
 		.altpos = 0,
 		.altlen = 0,
-		.altkeysym = NoSymbol,
+		.altkey = 0,
 		.acc = NULL,
 		.genscript = NULL,
-		.isgen = 0,
+		.flags = 0,
+		.file = NULL,
+		.icon[0]= None,
+		.icon[1]= None,
 	};
 	TAILQ_INIT(&item->children);
 	if (check(parse, TOK_CMD)) {
@@ -441,7 +448,12 @@ parseitemrec(struct ParseData *parse, struct Item *parent, struct AcceleratorQue
 		 */
 		consume(parse, TOK_CMD);
 	} else {
-		parsefullname(parse, item, accq);
+		parsename(parse, item);
+		if (check(parse, TOK_OPENSQUARE)) {
+			consume(parse, TOK_OPENSQUARE);
+			parsebraces(parse, item, accq);
+			consume(parse, TOK_CLOSESQUARE);
+		}
 		if (check(parse, TOK_CMD)) {
 			parsecmd(parse, item);
 			if (check(parse, TOK_OPENCURLY)) {
@@ -477,16 +489,6 @@ parselistrec(struct ParseData *parse, struct ItemQueue *itemq, struct Item *pare
 	ungettok(parse, toktype);
 }
 
-static void
-parsesimplename(struct ParseData *parse, struct Item *item)
-{
-	consume(parse, TOK_NAME);
-	setaltkey(parse, item);
-	setdescription(parse, item);
-	item->name = estrdup(parse->toktext);
-	item->len = strlen(item->name);
-}
-
 static struct Item *
 parseitemonce(struct ParseData *parse, struct Item *caller)
 {
@@ -500,10 +502,13 @@ parseitemonce(struct ParseData *parse, struct Item *caller)
 		.cmd = NULL,
 		.altpos = 0,
 		.altlen = 0,
-		.altkeysym = NoSymbol,
+		.altkey = 0,
 		.acc = NULL,
 		.genscript = NULL,
-		.isgen = 1,
+		.flags = ITEM_ISGEN,
+		.file = NULL,
+		.icon[0]= None,
+		.icon[1]= None,
 	};
 	TAILQ_INIT(&item->children);
 	if (check(parse, TOK_CMD)) {
@@ -513,7 +518,12 @@ parseitemonce(struct ParseData *parse, struct Item *caller)
 		 */
 		consume(parse, TOK_CMD);
 	} else {
-		parsesimplename(parse, item);
+		parsename(parse, item);
+		if (check(parse, TOK_OPENSQUARE)) {
+			consume(parse, TOK_OPENSQUARE);
+			parsebraces(parse, item, NULL);
+			consume(parse, TOK_CLOSESQUARE);
+		}
 		if (check(parse, TOK_CMD)) {
 			parsecmd(parse, item);
 		}
@@ -603,8 +613,14 @@ cleanitems(struct ItemQueue *itemq)
 			free(item->acc);
 		if (item->genscript != NULL)
 			free(item->genscript);
+		if (item->file != NULL)
+			free(item->file);
 		cleanitems(&item->children);
 		TAILQ_REMOVE(itemq, item, entries);
+		if (item->icon[0] != None)
+			XFreePixmap(dpy, item->icon[0]);
+		if (item->icon[1] != None)
+			XFreePixmap(dpy, item->icon[1]);
 		free(item);
 	}
 }

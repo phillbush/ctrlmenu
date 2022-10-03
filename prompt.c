@@ -95,17 +95,17 @@ drawinput(struct Prompt *prompt, int copy)
 	rect.x = 0;
 	rect.y = 0;
 	rect.width = prompt->rect.width;
-	rect.height = config.fontheight;
-	drawrectangle(prompt->pix, rect, dc.runnerbackground.pixel);
+	rect.height = config.itemheight;
+	drawrectangle(prompt->pix, rect, dc.colors[COLOR_RUNNER].background.pixel);
 
 	/* draw text before selection */
 	xtext = PADDING;
-	ytext = (config.fontheight + dc.face->ascent) / 2;
+	ytext = (config.itemheight + dc.face->height) / 2;
 	if (minpos > 0) {
 		widthpre = textwidth(prompt->text, minpos);
 		drawtext(
 			prompt->pix,
-			&dc.runnerforeground,
+			&dc.colors[COLOR_RUNNER].foreground,
 			xtext,
 			ytext,
 			prompt->text,
@@ -122,14 +122,14 @@ drawinput(struct Prompt *prompt, int copy)
 		len = strlen(prompt->ictext);
 		widthsel = textwidth(prompt->ictext, len);
 		rect.width = widthsel;
-		drawrectangle(prompt->pix, rect, dc.runnerforeground.pixel);
-		drawtext(prompt->pix, &dc.runnerbackground, xtext, ytext, prompt->ictext, len);
+		drawrectangle(prompt->pix, rect, dc.colors[COLOR_RUNNER].foreground.pixel);
+		drawtext(prompt->pix, &dc.colors[COLOR_RUNNER].background, xtext, ytext, prompt->ictext, len);
 	} else if (maxpos - minpos > 0) {
 		len = maxpos - minpos;
 		widthsel = textwidth(prompt->text + minpos, len);
 		rect.width = widthsel;
-		drawrectangle(prompt->pix, rect, dc.runnerforeground.pixel);
-		drawtext(prompt->pix, &dc.runnerbackground, xtext, ytext, prompt->text + minpos, len);
+		drawrectangle(prompt->pix, rect, dc.colors[COLOR_RUNNER].foreground.pixel);
+		drawtext(prompt->pix, &dc.colors[COLOR_RUNNER].background, xtext, ytext, prompt->text + minpos, len);
 	} else {
 		widthsel = 0;
 	}
@@ -137,14 +137,14 @@ drawinput(struct Prompt *prompt, int copy)
 	/* draw text after selection */
 	xtext += widthsel;
 	len = strlen(prompt->text + maxpos);
-	drawtext(prompt->pix, &dc.runnerforeground, xtext, ytext, prompt->text + maxpos, len);
+	drawtext(prompt->pix, &dc.colors[COLOR_RUNNER].foreground, xtext, ytext, prompt->text + maxpos, len);
 
 	/* draw cursor rectangle */
 	rect.x = PADDING + widthpre + ((prompt->composing && prompt->caret) ? textwidth(prompt->ictext, prompt->caret) : 0);
-	rect.y = PADDING / 2;
+	rect.y = (config.itemheight - dc.face->height) / 2;
 	rect.width = 1;
-	rect.height = config.fontheight - PADDING;
-	drawrectangle(prompt->pix, rect, dc.runnerforeground.pixel);
+	rect.height = config.itemheight - PADDING;
+	drawrectangle(prompt->pix, rect, dc.colors[COLOR_RUNNER].foreground.pixel);
 
 	if (copy) {
 		redrawprompt(prompt);
@@ -162,23 +162,23 @@ drawitems(struct Prompt *prompt)
 	int i, ytext;
 
 	rect.x = 0;
-	rect.height = config.fontheight;
+	rect.height = config.itemheight;
 	rect.width = prompt->rect.width;
 	prev = NULL;
 	for (i = 0; i < prompt->nitems; i++) {
 		item = prompt->itemarray[i];
 		if (item == prompt->selitem) {
-			pixel = dc.runnerselbackground.pixel;
-			color = &dc.runnerselforeground;
-			altcolor = &dc.runneraltselforeground;
+			pixel = dc.colors[COLOR_RUNNER].selbackground.pixel;
+			color = &dc.colors[COLOR_RUNNER].selforeground;
+			altcolor = &dc.colors[COLOR_RUNNER].altselforeground;
 		} else {
-			pixel = dc.runnerbackground.pixel;
-			color = &dc.runnerforeground;
-			altcolor = &dc.runneraltforeground;
+			pixel = dc.colors[COLOR_RUNNER].background.pixel;
+			color = &dc.colors[COLOR_RUNNER].foreground;
+			altcolor = &dc.colors[COLOR_RUNNER].altforeground;
 		}
-		rect.y = (i + 1) * config.fontheight + SEPARATOR_HEIGHT;
+		rect.y = (i + 1) * config.itemheight + SEPARATOR_HEIGHT;
 		drawrectangle(prompt->pix, rect, pixel);
-		ytext = rect.y + (config.fontheight + dc.face->ascent) / 2;
+		ytext = rect.y + (config.itemheight + dc.face->ascent) / 2;
 		if (prev == NULL || (item->caller != NULL && item->caller != prev->caller)) {
 			drawtext(
 				prompt->pix,
@@ -215,8 +215,8 @@ drawitems(struct Prompt *prompt)
 void
 drawprompt(struct Prompt *prompt)
 {
-	drawrectangle(prompt->pix, prompt->rect, dc.runnerbackground.pixel);
-	drawseparator(prompt->pix, PADDING, config.fontheight + PADDING, prompt->rect.width - 2 * PADDING, 0);
+	drawrectangle(prompt->pix, prompt->rect, dc.colors[COLOR_RUNNER].background.pixel);
+	drawseparator(prompt->pix, PADDING, config.itemheight + PADDING, prompt->rect.width - 2 * PADDING, 0);
 	drawinput(prompt, 0);
 	drawitems(prompt);
 	redrawprompt(prompt);
@@ -678,13 +678,13 @@ setprompt(struct ItemQueue *itemq, Window *win, int *inited)
 		.firstmatch = NULL,
 		.selitem = NULL,
 		.listfirst = NULL,
-		.maxitems = config.number_items,
+		.maxitems = config.runner_items,
 		.nitems = 0,
 	};
 	prompt->itemarray = ecalloc(prompt->maxitems, sizeof(*prompt->itemarray)),
 	prompt->rect.x = prompt->rect.y = 0;
 	prompt->rect.width = DEFWIDTH;
-	prompt->rect.height = SEPARATOR_HEIGHT + config.fontheight * (prompt->maxitems + 1);
+	prompt->rect.height = SEPARATOR_HEIGHT + config.itemheight * (prompt->maxitems + 1);
 ;
 	prompt->win = createwindow(&prompt->rect, RUNNER, TITLE);
 

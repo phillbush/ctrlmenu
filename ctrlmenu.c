@@ -5,16 +5,20 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <unistd.h>
 
 #include "ctrlmenu.h"
 
 #define GETROOTMENU(c, w)  (((w) == (c)->docked.win) ? &(c)->docked : getmenu(&(c)->tornoffq, (w)))
 #define GETOPENMENU(c, w)  (((c)->curroot != NULL && (w) == (c)->curroot->win) ? (c)->curroot : getmenu(&(c)->popupq, (w)))
+#define GETFIRSTMENU(c)    (TAILQ_FIRST(&(c)->popupq) != NULL ? TAILQ_FIRST(&(c)->popupq) : (c)->curroot)
 #define TORNOFF_HEIGHT     (config.tornoff ? SEPARATOR_HEIGHT : 0)
 #define MODS               (ShiftMask | ControlMask | Mod1Mask | Mod4Mask)
 #define SCROLL_TIME        100
 #define SCROLL_WAIT        200
+#define ICONPATH           "ICONPATH"   /* environment variable name */
+#define RUNNER             "RUNNER"
 
 enum {
 	STATE_NORMAL,
@@ -51,17 +55,22 @@ struct Control {
 
 	KeyCode altkey;
 
+	unsigned int button;
+	unsigned int buttonmod;
+
 	KeyCode runnerkey;
 	unsigned int runnermod;
 
 	struct Prompt *prompt;
 	Window promptwin;
+
+	int passclick;
 };
 
 /* dummy items */
-struct Item tornoff = { .name = "tornoff" };
-struct Item scrollup = { .name = "scrollup" };
-struct Item scrolldown = { .name = "scrolldown" };
+static struct Item tornoff = { .name = "tornoff" };
+static struct Item scrollup = { .name = "scrollup" };
+static struct Item scrolldown = { .name = "scrolldown" };
 
 static void
 usage(void)
@@ -71,20 +80,23 @@ usage(void)
 }
 
 static void
-drawmenu(struct Menu *menu, int menutype, int alt)
+drawmenu(struct Menu *menu, struct Item *oldsel, int menutype, int alt, int drawall)
 {
 	struct Item *item;
 	XRectangle rect;
-	XftColor *color;
+	XftColor *colorfg, *colorbg, *coloracc;
 	size_t acclen;
-	int beg, textx, texty, separatorwid, right;
+	int beg, textx, texty, separatorx, separatorwid, right, icony, x;
 	int altx, altw;
+	int issel, flag;
 
 	/* draw menu */
+	icony = max(0, (config.itemheight - config.iconsize) / 2);
 	rect.x = rect.y = beg = 0;
 	rect.width = menu->rect.width;
 	rect.height = menu->rect.height;
-	drawrectangle(menu->pix, rect, dc.menubackground.pixel);
+	if (drawall)
+		drawrectangle(menu->pix, rect, dc.colors[COLOR_MENU].background.pixel);
 	separatorwid = menu->rect.width - 2 * config.shadowThickness - 2 * PADDING;
 	if (menutype == MENU_POPUP) {
 		alt = 1;
@@ -95,42 +107,70 @@ drawmenu(struct Menu *menu, int menutype, int alt)
 	} else {
 		right = 2 * PADDING + config.triangle_width;
 	}
+	textx = separatorx = rect.x + PADDING;
+	if (menu->hasicon)
+		textx += config.iconsize + PADDING;
 	if (menu->overflow)
 		rect.y += SEPARATOR_HEIGHT;
 	for (item = menu->first; item != NULL; item = TAILQ_NEXT(item, entries)) {
-		color = (item == menu->selected ? &dc.menuselforeground : &dc.menuforeground);
+		rect.height = item->name != NULL ? config.itemheight : SEPARATOR_HEIGHT;
+		if (!drawall && item != oldsel && item != menu->selected)
+			goto donewithitem;
+		issel = item == menu->selected;
+		flag = (issel ? ITEM_SELICON : ITEM_ICON);
+		coloracc = (issel ? &dc.colors[COLOR_MENU].altselforeground : &dc.colors[COLOR_MENU].altforeground);
+		colorfg = (issel ? &dc.colors[COLOR_MENU].selforeground : &dc.colors[COLOR_MENU].foreground);
+		colorbg = (issel ? &dc.colors[COLOR_MENU].selbackground : &dc.colors[COLOR_MENU].background);
 		if (item->name == NULL) {
-			rect.height = SEPARATOR_HEIGHT;
-			drawseparator(menu->pix, rect.x + PADDING, rect.y + PADDING, separatorwid, 0);
+			drawseparator(menu->pix, separatorx, rect.y + PADDING, separatorwid, 0);
 		} else {
-			rect.height = config.fontheight;
-			texty = rect.y + (rect.height + dc.face->ascent) / 2;
+			texty = rect.y + (rect.height + config.fontascent) / 2;
 
 			/* draw rectangle below menu item */
-			drawrectangle(menu->pix, rect, (item == menu->selected ? dc.menuselbackground.pixel : dc.menubackground.pixel));
+			drawrectangle(menu->pix, rect, colorbg->pixel);
 
-			/* draw menu item text */
-			textx = rect.x + PADDING;
+			/* draw item icon */
+			if (item->file != NULL) {
+				if (!(item->flags & flag)) {
+					item->icon[issel] = geticon(menu->win, item->file, issel, COLOR_MENU);
+					item->flags |= flag;
+				}
+				if (item->icon[issel] != None) {
+					copypixmap(
+						menu->pix,
+						item->icon[issel],
+						(XRectangle){
+							.x = PADDING ,
+							.y = rect.y + icony,
+							.width = config.iconsize,
+							.height = config.iconsize,
+						}
+					);
+				}
+			}
+
+			/* draw item text */
+			x = textx;
 			if (config.alignment == ALIGN_CENTER)
-				textx += (menu->maxwidth - textwidth(item->name, item->len)) / 2;
+				x += (menu->maxwidth - textwidth(item->name, item->len)) / 2;
 			else if (config.alignment == ALIGN_RIGHT)
-				textx += menu->maxwidth - textwidth(item->name, item->len);
-			textx = max(rect.x + PADDING, textx);
+				x += menu->maxwidth - textwidth(item->name, item->len);
+			x = max(textx, x);
 			if (alt && item->altlen > 0 && item->altpos + item->altlen <= item->len) {
-				altx = textx + textwidth(item->name, item->altpos);
+				altx = x + textwidth(item->name, item->altpos);
 				altw = textwidth(item->name + item->altpos, item->altlen);
 				drawrectangle(
 					menu->pix,
 					(XRectangle){ .x = altx, .y = texty + 1, .width = altw, .height = 1 },
-					color->pixel
+					colorfg->pixel
 				);
 			}
-			drawtext(menu->pix, color, textx, texty, item->name, item->len);
+			drawtext(menu->pix, colorfg, x, texty, item->name, item->len);
 			if (item->acc != NULL) {
 				acclen = strlen(item->acc);
 				drawtext(
 					menu->pix,
-					color,
+					coloracc,
 					menu->rect.width - textwidth(item->acc, acclen) - right,
 					texty,
 					item->acc,
@@ -140,14 +180,14 @@ drawmenu(struct Menu *menu, int menutype, int alt)
 			if (menutype != MENU_DOCKAPP && (item->genscript != NULL || !TAILQ_EMPTY(&item->children))) {
 				drawtriangle(
 					menu->pix,
-					color->pixel,
+					colorfg->pixel,
 					rect.width - rect.x - PADDING - config.triangle_width,
 					rect.y + (rect.height - config.triangle_height) / 2,
 					DIR_RIGHT
 				);
 			}
 		}
-
+donewithitem:
 		rect.y += rect.height;
 		if (menu->overflow && rect.y + rect.height > menu->rect.height - SEPARATOR_HEIGHT - beg) {
 			break;
@@ -159,13 +199,13 @@ drawmenu(struct Menu *menu, int menutype, int alt)
 	rect.height = SEPARATOR_HEIGHT;
 	if (menutype == MENU_POPUP) {
 		if (config.tornoff) {
-			color = (menu->selected == &tornoff ? &dc.menuselbackground : &dc.menubackground);
-			drawrectangle(menu->pix, rect, color->pixel);
+			colorfg = (menu->selected == &tornoff ? &dc.colors[COLOR_MENU].selbackground : &dc.colors[COLOR_MENU].background);
+			drawrectangle(menu->pix, rect, colorfg->pixel);
 			drawseparator(menu->pix, config.shadowThickness + PADDING, config.shadowThickness + PADDING, separatorwid, 1);
-			rect.y += SEPARATOR_HEIGHT;
+			rect.y += TORNOFF_HEIGHT;
 		}
 		rect.x = config.shadowThickness;
-		rect.y = config.shadowThickness + SEPARATOR_HEIGHT;
+		rect.y = config.shadowThickness + TORNOFF_HEIGHT;
 	} else {
 		rect.x = rect.y = 0;
 	}
@@ -173,11 +213,11 @@ drawmenu(struct Menu *menu, int menutype, int alt)
 		drawrectangle(
 			menu->pix,
 			rect,
-			(menu->selected == &scrollup ? dc.menuselbackground.pixel : dc.menubackground.pixel)
+			(menu->selected == &scrollup ? dc.colors[COLOR_MENU].selbackground.pixel : dc.colors[COLOR_MENU].background.pixel)
 		);
 		drawtriangle(
 			menu->pix,
-			(menu->selected == &scrollup ? dc.menuselforeground.pixel : dc.menuforeground.pixel),
+			(menu->selected == &scrollup ? dc.colors[COLOR_MENU].selforeground.pixel : dc.colors[COLOR_MENU].foreground.pixel),
 			rect.x + (menu->rect.width - config.triangle_height) / 2,
 			rect.y + (SEPARATOR_HEIGHT - config.triangle_width) / 2,
 			DIR_UP
@@ -186,11 +226,11 @@ drawmenu(struct Menu *menu, int menutype, int alt)
 		drawrectangle(
 			menu->pix,
 			rect,
-			(menu->selected == &scrolldown ? dc.menuselbackground.pixel : dc.menubackground.pixel)
+			(menu->selected == &scrolldown ? dc.colors[COLOR_MENU].selbackground.pixel : dc.colors[COLOR_MENU].background.pixel)
 		);
 		drawtriangle(
 			menu->pix,
-			(menu->selected == &scrolldown ? dc.menuselforeground.pixel : dc.menuforeground.pixel),
+			(menu->selected == &scrolldown ? dc.colors[COLOR_MENU].selforeground.pixel : dc.colors[COLOR_MENU].foreground.pixel),
 			rect.x + (menu->rect.width - config.triangle_height) / 2,
 			rect.y + (SEPARATOR_HEIGHT - config.triangle_width) / 2 - beg,
 			DIR_DOWN
@@ -206,8 +246,8 @@ drawmenu(struct Menu *menu, int menutype, int alt)
 				.width = menu->rect.width,
 				.height = menu->rect.height,
 			},
-			dc.menutopShadow.pixel,
-			dc.menubottomShadow.pixel
+			dc.topShadow.pixel,
+			dc.bottomShadow.pixel
 		);
 	}
 	commitdrawing(menu->win, menu->pix, menu->rect);
@@ -239,7 +279,7 @@ setdockedmenu(struct Menu *root, struct ItemQueue *itemq)
 	TAILQ_FOREACH(item, root->queue, entries) {
 		if (item->name != NULL) {
 			textw = textwidth(item->name, strlen(item->name));
-			root->rect.height += config.fontheight;
+			root->rect.height += config.itemheight;
 		} else {
 			textw = 0;
 			root->rect.height += SEPARATOR_HEIGHT;
@@ -250,7 +290,7 @@ setdockedmenu(struct Menu *root, struct ItemQueue *itemq)
 	root->rect.width += PADDING * 2;
 	root->win = createwindow(&root->rect, MENU_DOCKAPP, CLASS);
 	root->pix = createpixmap(root->rect, root->win);
-	drawmenu(root, MENU_DOCKAPP, 0);
+	drawmenu(root, NULL, MENU_DOCKAPP, 0, 1);
 	mapwin(root->win);
 }
 
@@ -260,12 +300,14 @@ insertmenu(struct MenuQueue *menuq, Window parentwin, XRectangle parentrect, str
 	XRectangle mon;
 	struct Menu *menu;
 	struct Item *item;
-	int menuh, textw, accelw, xplusw;
+	int menuh, textw, accelw, xplusw, gap;
+	int nitems;
 
 	getmonitors();
 	translatecoordinates(parentwin, &parentrect.x, &parentrect.y);
 	mon = getselmon(&parentrect);
 	menu = emalloc(sizeof(*menu));
+	gap = (caller != NULL ? config.gap : 0);
 	*menu = (struct Menu){
 		.queue = itemq,
 		.first = TAILQ_FIRST(itemq),
@@ -273,6 +315,7 @@ insertmenu(struct MenuQueue *menuq, Window parentwin, XRectangle parentrect, str
 		.overflow = 0,
 		.maxwidth = 0,
 		.isgen = (caller != NULL && caller->genscript != NULL),
+		.hasicon = 0,
 		.selected = NULL,
 		.pix = None,
 		.rect = (XRectangle){
@@ -282,6 +325,13 @@ insertmenu(struct MenuQueue *menuq, Window parentwin, XRectangle parentrect, str
 			.height = config.shadowThickness * 2 + SEPARATOR_HEIGHT,
 		},
 	};
+	if (type == MENU_TORNOFF) {
+		/* remove shadow from tornoff menus */
+		menu->rect.x += config.shadowThickness;
+		menu->rect.y += config.shadowThickness;
+		menu->rect.width = max(0, menu->rect.width - 2 * config.shadowThickness);
+		menu->rect.height = max(0, menu->rect.height - 2 * config.shadowThickness);
+	}
 	TAILQ_INSERT_HEAD(menuq, menu, entries);
 	if (TAILQ_EMPTY(menu->queue))
 		goto done;
@@ -289,20 +339,25 @@ insertmenu(struct MenuQueue *menuq, Window parentwin, XRectangle parentrect, str
 	if (type == MENU_POPUP)
 		menuh = config.shadowThickness * 2 + TORNOFF_HEIGHT;
 	accelw = 0;
+	nitems = 0;
 	TAILQ_FOREACH(item, menu->queue, entries) {
 		if (item->name != NULL) {
 			textw = textwidth(item->name, strlen(item->name));
-			if (item->acc != NULL) {
+			if (item->acc != NULL)
 				accelw = max(accelw, textwidth(item->acc, strlen(item->acc)) + 2 * PADDING);
-			}
-			menuh += config.fontheight;
+			menuh += config.itemheight;
+			if (item->file != NULL)
+				menu->hasicon = 1;
+			nitems++;
 		} else {
 			textw = 0;
 			menuh += SEPARATOR_HEIGHT;
 		}
 		menu->maxwidth = max(menu->maxwidth, textw);
+		if (config.max_items > 0 && nitems > config.max_items)
+			menu->overflow = 1;
 		if (!menu->overflow) {
-			if (menuh + config.fontheight + SEPARATOR_HEIGHT * 2 < mon.height) {
+			if (menuh + config.itemheight + SEPARATOR_HEIGHT * 2 < mon.height) {
 				menu->rect.height = menuh;
 			} else {
 				menu->overflow = 1;
@@ -312,6 +367,8 @@ insertmenu(struct MenuQueue *menuq, Window parentwin, XRectangle parentrect, str
 	}
 	menu->rect.width = menu->maxwidth + accelw;
 	menu->rect.width += config.triangle_width + PADDING * 3;     /* PAD + name + PAD + triangle + PAD */
+	if (menu->hasicon)
+		menu->rect.width += config.iconsize + PADDING;
 	if (type == MENU_POPUP)
 		menu->rect.width += config.shadowThickness * 2;
 
@@ -324,28 +381,26 @@ done:
 		 */
 		menu->rect.x = mon.x;
 		menu->rect.y = mon.y;
-		xplusw = parentrect.x + parentrect.width;
+		xplusw = parentrect.x + parentrect.width + gap;
 		if (menu->rect.width > mon.width / 2)
 			menu->rect.width = mon.width / 2;
 		if (mon.x + mon.width - xplusw >= menu->rect.width) {
 			menu->rect.x = xplusw;
-		} else if (parentrect.x > menu->rect.width) {
-			menu->rect.x = parentrect.x - menu->rect.width;
+		} else if (parentrect.x > menu->rect.width + gap) {
+			menu->rect.x = parentrect.x - menu->rect.width - gap;
 		}
 		y -= config.shadowThickness + TORNOFF_HEIGHT;
 		y = max(0, y);
-		if (!menu->overflow) {
-			if (mon.y + mon.height - (parentrect.y + y) >= menu->rect.height) {
-				menu->rect.y = parentrect.y + y;
-			} else if (mon.y + mon.height > menu->rect.height) {
-				menu->rect.y = mon.y + mon.height - menu->rect.height;
-			}
+		if (mon.y + mon.height - (parentrect.y + y) >= menu->rect.height) {
+			menu->rect.y = parentrect.y + y;
+		} else if (mon.y + mon.height > menu->rect.height) {
+			menu->rect.y = mon.y + mon.height - menu->rect.height;
 		}
 	}
 
 	menu->win = createwindow(&menu->rect, type, caller != NULL ? caller->name : CLASS);
 	menu->pix = createpixmap(menu->rect, menu->win);
-	drawmenu(menu, type, 0);
+	drawmenu(menu, NULL, type, 0, 1);
 	mapwin(menu->win);
 }
 
@@ -364,7 +419,7 @@ getmenutype(struct Control *ctrl, struct Menu *menu)
 {
 	if (menu == &ctrl->docked)
 		return MENU_DOCKAPP;
-	if (TAILQ_EMPTY(&ctrl->popupq) || menu == ctrl->curroot)
+	if (TAILQ_EMPTY(&ctrl->popupq) || (menu == ctrl->curroot && menu != TAILQ_LAST(&ctrl->popupq, MenuQueue)))
 		return MENU_TORNOFF;
 	return MENU_POPUP;
 }
@@ -402,9 +457,9 @@ getitem(struct Menu *menu, int menutype, int y, int *ytop)
 		h += SEPARATOR_HEIGHT;
 	}
 	for (item = menu->first; item != NULL; item = TAILQ_NEXT(item, entries)) {
-		if (item->name != NULL && y >= h && y < h + config.fontheight)
+		if (item->name != NULL && y >= h && y < h + config.itemheight)
 			break;
-		h += (item->name != NULL) ? config.fontheight : SEPARATOR_HEIGHT;
+		h += (item->name != NULL) ? config.itemheight : SEPARATOR_HEIGHT;
 	}
 	if (ytop != NULL)
 		*ytop = h;
@@ -467,17 +522,6 @@ matchacc(struct AcceleratorQueue *accq, KeyCode key, unsigned int mods)
 	return NULL;
 }
 
-static void
-bindaccs(struct AcceleratorQueue *accq, KeyCode key, unsigned int mods)
-{
-	struct Accelerator *acc;
-
-	grabkey(key, mods);
-	TAILQ_FOREACH(acc, accq, entries) {
-		grabkey(acc->key, acc->mods);
-	}
-}
-
 static int
 scroll(struct Control *ctrl, Window win)
 {
@@ -496,22 +540,22 @@ scroll(struct Control *ctrl, Window win)
 	end = menu->rect.height - end;
 	if (menu->selected == &scrolldown) {
 		for (item = menu->first; item != NULL; item = TAILQ_NEXT(item, entries)) {
-			h += (item->name != NULL) ? config.fontheight : SEPARATOR_HEIGHT;
+			h += (item->name != NULL) ? config.itemheight : SEPARATOR_HEIGHT;
 			if (h >= end) {
 				break;
 			}
 		}
 		if (item != NULL && TAILQ_NEXT(menu->first, entries) != NULL) {
-			h = (item->name != NULL) ? config.fontheight : SEPARATOR_HEIGHT;
+			h = (item->name != NULL) ? config.itemheight : SEPARATOR_HEIGHT;
 			menu->first = TAILQ_NEXT(menu->first, entries);
-			drawmenu(menu, menutype, 0);
+			drawmenu(menu, NULL, menutype, 0, 1);
 			XFlush(dpy);
 		} else {
 			return 0;
 		}
 	} else if (TAILQ_PREV(menu->first, ItemQueue, entries) != NULL) {
 		menu->first = TAILQ_PREV(menu->first, ItemQueue, entries);
-		drawmenu(menu, menutype, 0);
+		drawmenu(menu, NULL, menutype, 0, 1);
 		XFlush(dpy);
 	} else {
 		return 0;
@@ -531,29 +575,64 @@ configuremenu(struct Menu *menu, int x, int y, int w, int h)
 	menu->pix = createpixmap(menu->rect, menu->win);
 }
 
+static unsigned int
+getmod(char **str)
+{
+	unsigned int mod;
+	int any;
+	char *s, *p;
+
+	mod = 0;
+	any = 0;
+	if (*str == NULL)
+		return 0;
+	s = NULL;
+	for (p = strtok((*str), "-"); p; s = p, p = strtok(NULL, "-")) {
+		if (s == NULL)
+			continue;
+		switch (*s) {
+		case 'S': mod |= ShiftMask;   break;
+		case 'C': mod |= ControlMask; break;
+		case 'A':
+		case '1': mod |= Mod1Mask;    break;
+		case '2': mod |= Mod2Mask;    break;
+		case '3': mod |= Mod3Mask;    break;
+		case 'W':
+		case '4': mod |= Mod4Mask;    break;
+		case '5': mod |= Mod5Mask;    break;
+		case 'N': any = 1;            break;
+		default: break;
+		}
+	}
+	*str = s;
+	return any ? AnyModifier : mod;
+}
+
 static void
 initgrabs(struct Control *ctrl)
 {
-	const char *s;
+	struct Accelerator *acc;
+	size_t len;
 
-	ctrl->altkey = getkeycode(config.altkey);
-	ctrl->runnermod = 0;
-	s = config.runner;
-	while (s[0] != '\0' && s[1] == '-') {
-		switch (s[0]) {
-		case 'S': ctrl->runnermod |= ShiftMask;   break;
-		case 'C': ctrl->runnermod |= ControlMask; break;
-		case 'A': ctrl->runnermod |= Mod1Mask;    break;
-		case 'W': ctrl->runnermod |= Mod4Mask;    break;
-		default: break;
-		}
-		s += 2;
+	if (config.mode & MODE_DOCKAPP) {
+		ctrl->altkey = getkeycode(config.altkey);
+		grabkeysync(ctrl->altkey);
 	}
-	ctrl->runnerkey = getkeycode(s);
-	bindaccs(&ctrl->accq, ctrl->runnerkey, ctrl->runnermod);
-	grabkeysync(ctrl->altkey);
-	if (config.mode & MODE_CONTEXT) {
-		grabbuttonsync(Button3);
+	if (config.runner != NULL && config.runner[0] != '\0') {
+		ctrl->runnermod = getmod(&config.runner);
+		ctrl->runnerkey = getkeycode(config.runner);
+		grabkey(ctrl->runnerkey, ctrl->runnermod);
+	}
+	if (config.button != NULL && config.button[0] != '\0') {
+		ctrl->buttonmod = getmod(&config.button);
+		ctrl->button = strtoul(config.button, NULL, 10);
+		len = strlen(config.button);
+		if (len > 0 && (config.button[len-1] == 'P' || config.button[len-1] == 'p'))
+			ctrl->passclick = 1;
+		grabbuttonsync(ctrl->button);
+	}
+	TAILQ_FOREACH(acc, &ctrl->accq, entries) {
+		grabkey(acc->key, acc->mods);
 	}
 }
 
@@ -565,21 +644,21 @@ removepopped(struct Control *ctrl)
 	ungrab();
 	firstpopped = TAILQ_LAST(&ctrl->popupq, MenuQueue);
 	delmenus(&ctrl->popupq, firstpopped);
-	if (ctrl->curroot != NULL) {
+	if (ctrl->curroot != NULL && ctrl->curroot != firstpopped) {
 		ctrl->curroot->selected = NULL;
-		drawmenu(ctrl->curroot, getmenutype(ctrl, ctrl->curroot), 0);
+		drawmenu(ctrl->curroot, NULL, getmenutype(ctrl, ctrl->curroot), 0, 1);
 		ctrl->curroot = NULL;
 	}
 	return;
 }
 
 static void
-initpopped(struct Control *ctrl, struct Menu *rootmenu)
+initpopped(struct Control *ctrl, struct Menu *rootmenu, Window parentwin, XRectangle parentrect, struct Item *caller, struct ItemQueue *itemq, int y)
 {
-	ctrl->curroot = rootmenu;
-	// insertpopupmenu(&ctrl->popupq, ctrl->curroot, ctrl->curroot->selected, y);
 	if (grab(GRAB_POINTER | GRAB_KEYBOARD) == -1)
 		removepopped(ctrl);
+	insertpopupmenu(&ctrl->popupq, parentwin, parentrect, caller, itemq, y);
+	ctrl->curroot = rootmenu;
 	return;
 }
 
@@ -597,11 +676,11 @@ draw(struct Control *ctrl, Window win)
 }
 
 static struct Item *
-getaltitem(struct Menu *menu, KeySym ksym, int menutype, int *ytop)
+getaltitem(struct Menu *menu, KeyCode key, int menutype, int *ytop)
 {
 	struct Item *item;
 
-	if (ksym == NoSymbol || menu == NULL)
+	if (key == 0 || menu == NULL)
 		return NULL;
 	if (menutype == MENU_POPUP)
 		*ytop = config.shadowThickness + TORNOFF_HEIGHT;
@@ -610,33 +689,171 @@ getaltitem(struct Menu *menu, KeySym ksym, int menutype, int *ytop)
 	if (menu->overflow)
 		*ytop += SEPARATOR_HEIGHT;
 	TAILQ_FOREACH(item, menu->queue, entries) {
-		if (ksym == item->altkeysym)
+		if (key == item->altkey)
 			return item;
-		*ytop += (item->name != NULL) ? config.fontheight : SEPARATOR_HEIGHT;
+		*ytop += (item->name != NULL) ? config.itemheight : SEPARATOR_HEIGHT;
 	}
 	return NULL;
 }
+
+static int
+itemcycle(struct Menu *menu, int menutype, int forward)
+{
+	struct Item *item, *prev, *oldfirst;
+	int h, end, y;
+
+	end = h = SEPARATOR_HEIGHT;
+	if (menutype == MENU_POPUP) {
+		h += config.shadowThickness + TORNOFF_HEIGHT;
+		end += config.shadowThickness;
+	}
+	end = menu->rect.height - end;
+	oldfirst = menu->first;
+	if (forward) {
+		prev = NULL;
+		y = h;
+		/* look for next selectable item; scroll as needed */
+		for (item = menu->first; item != NULL; item = TAILQ_NEXT(item, entries)) {
+			y += (item->name != NULL) ? config.itemheight : SEPARATOR_HEIGHT;
+			if (menu->overflow && y >= end)
+				menu->first = TAILQ_NEXT(menu->first, entries);
+			if (item->name != NULL) {
+				if (prev == menu->selected || (prev != NULL && menu->selected == NULL)) {
+					menu->selected = item;
+					goto done;
+				}
+				prev = item;
+			}
+		}
+		y = h;
+		/* select first selectable item; scroll as needed */
+		if (menu->overflow)
+			menu->first = TAILQ_FIRST(menu->queue);
+		TAILQ_FOREACH(item, menu->queue, entries) {
+			if (item->name != NULL) {
+				menu->selected = item;
+				goto done;
+			}
+		}
+	} else {
+		prev = NULL;
+		y = h;
+		/* if first item selected, select previous selectable item and scroll */
+		if (menu->overflow && menu->first != TAILQ_FIRST(menu->queue) && menu->selected == menu->first) {
+			for (item = TAILQ_PREV(menu->first, ItemQueue, entries);
+			     item != NULL;
+			     item = TAILQ_PREV(item, ItemQueue, entries)) {
+				if (item->name != NULL) {
+					menu->selected = menu->first = item;
+					goto done;
+				}
+			}
+		}
+		/* select previous selectable item; scroll as needed */
+		for (item = menu->first; item != NULL; item = TAILQ_NEXT(item, entries)) {
+			y += (item->name != NULL) ? config.itemheight : SEPARATOR_HEIGHT;
+			if (menu->overflow && y >= end)
+				menu->first = TAILQ_NEXT(menu->first, entries);
+			if (item->name != NULL) {
+				if (item == menu->selected) {
+					menu->selected = prev;
+					if (prev != NULL) {
+						goto done;
+					}
+				}
+				prev = item;
+			}
+		}
+		y = h;
+		prev = NULL;
+		/* select last selectable item; scroll as needed */
+		TAILQ_FOREACH_REVERSE(item, menu->queue, ItemQueue, entries) {
+			y += (item->name != NULL) ? config.itemheight : SEPARATOR_HEIGHT;
+			if (item->name != NULL && menu->selected == NULL) {
+				menu->selected = item;
+				if (!menu->overflow) {
+					goto done;
+				}
+			}
+			if (menu->overflow && y >= end && prev != NULL) {
+				menu->first = prev;
+				goto done;
+			}
+			prev = item;
+		}
+	}
+done:
+	return oldfirst != menu->first;
+}
+
+#define REMOVEPOPPED(ctrl)                \
+	do {                              \
+		removepopped(ctrl);       \
+		menustate = STATE_NORMAL; \
+		if (config.mode == 0) {   \
+			goto done;        \
+		}                         \
+	} while (0)
+
+#define OPENITEM(ctrl, menu, item, type, gen, motion, y)                                             \
+	do {                                                                                           \
+		if (!(gen) && ((item)->genscript != NULL || !TAILQ_EMPTY(&(item)->children))) {        \
+			ignorerelease = 0;                                                             \
+			if (menustate != STATE_POPUP && (motion))                                      \
+				break;                                                                 \
+			if (menustate != STATE_POPUP) {                                                \
+				initpopped(                                                            \
+					(ctrl),                                                        \
+					(menu),                                                        \
+					(menu)->win,                                                   \
+					(menu)->rect,                                                  \
+					(item),                                                        \
+					&(item)->children,                                             \
+					(y)                                                            \
+				);                                                                     \
+				menustate = STATE_POPUP;                                               \
+			} else {                                                                       \
+				insertpopupmenu(                                                       \
+					&(ctrl)->popupq,                                               \
+					(menu)->win,                                                   \
+					(menu)->rect,                                                  \
+					(item),                                                        \
+					&(item)->children,                                             \
+					(y)                                                            \
+				);                                                                     \
+			}                                                                              \
+		} else if (!(motion) && (item)->genscript == NULL && TAILQ_EMPTY(&(item)->children)) { \
+			enteritem((item));                                                             \
+			if (menustate == STATE_POPUP) {                                                \
+				REMOVEPOPPED((ctrl));                                                  \
+			}                                                                              \
+		}                                                                                      \
+	} while (0)
 
 static void
 run(struct Control *ctrl, struct ItemQueue *itemq)
 {
 	struct Menu *menu, *rootmenu;
-	struct Item *item;
+	struct Item *item, *oldsel;
 	struct pollfd pfd;
-	KeySym ksym;
 	Window win, scrollwin;
 	XEvent ev;
-	int promptopen;         /* either 1 (prompt open) or 0 (prompt closer) */
+	KeySym ksym;
 	int menustate;          /* STATE_NORMAL, STATE_ALTPRESSED or STATE_POPUP */
-	int gen, type, pos, ytop, len;
-	int ret, timeout, operation;
+	int promptopen;         /* whether prompt window is open */
+	int gen, type, pos, x, y, scrolled;
+	int ret, timeout, len, operation;
 	int ignorerelease;      /* whether to ignore button release after pressing on root */
 	char buf[INPUTSIZ];
 
 	TAILQ_INIT(&ctrl->tornoffq);
 	TAILQ_INIT(&ctrl->popupq);
 	ctrl->curroot = NULL;
-	ctrl->prompt = setprompt(itemq, &ctrl->promptwin, &promptopen);
+	ctrl->passclick = 0;
+	if (config.mode & MODE_RUNNER)
+		ctrl->prompt = setprompt(itemq, &ctrl->promptwin, &promptopen);
+	else
+		ctrl->prompt = NULL;
 	if (config.mode & MODE_DOCKAPP)
 		setdockedmenu(&ctrl->docked, itemq);
 	initgrabs(ctrl);
@@ -646,9 +863,23 @@ run(struct Control *ctrl, struct ItemQueue *itemq)
 	timeout = -1;
 	ret = 1;
 	ignorerelease = 0;
-	promptopen = 0;
-	menustate = STATE_NORMAL;
 	scrollwin = None;
+	promptopen = 0;
+	if (config.mode == 0) {
+		menustate = STATE_POPUP;
+		querypointer(&x, &y);
+		initpopped(
+			ctrl,
+			NULL,
+			root,
+			(XRectangle){ .x = x, .y = y, .width = 0, .height = 0 },
+			NULL,
+			itemq,
+			0
+		);
+	} else {
+		menustate = STATE_NORMAL;
+	}
 	do {
 		if (ret == 0) {
 			if (scroll(ctrl, scrollwin)) {
@@ -676,19 +907,22 @@ nextevent:
 			if (menustate == STATE_POPUP || (menu = GETROOTMENU(ctrl, ev.xbutton.window)) == NULL)
 				break;
 			type = getmenutype(ctrl, menu);
-			if (menu->selected != NULL) {
+			if ((oldsel = menu->selected) != NULL) {
 				menu->selected = NULL;
-				drawmenu(menu, type, 0);
+				drawmenu(menu, oldsel, type, 0, 0);
 			}
 			break;
 		case ButtonPress:
 			if (ev.xbutton.window != root || invalidbutton(&ev))
 				break;
 			if (menustate == STATE_NORMAL && (config.mode & MODE_CONTEXT) &&
-			    ev.xbutton.subwindow == None && ev.xbutton.button == Button3) {
-				initpopped(ctrl, NULL);
-				insertpopupmenu(
-					&ctrl->popupq,
+			    ev.xbutton.button == ctrl->button &&
+			    (ctrl->buttonmod == AnyModifier ||
+			     (ctrl->buttonmod != 0 && (ev.xbutton.state & MODS) == ctrl->buttonmod) ||
+			     (ev.xbutton.subwindow == None))) {
+				initpopped(
+					ctrl,
+					NULL,
 					root,
 					(XRectangle){ .x = ev.xbutton.x_root, .y = ev.xbutton.y_root, .width = 0, .height = 0 },
 					NULL,
@@ -698,8 +932,7 @@ nextevent:
 				menustate = STATE_POPUP;
 				ignorerelease = 1;
 			} else if (menustate == STATE_POPUP) {
-				removepopped(ctrl);
-				menustate = STATE_NORMAL;
+				REMOVEPOPPED(ctrl);
 			}
 			break;
 		case MotionNotify:
@@ -716,40 +949,35 @@ nextevent:
 			menu = GETOPENMENU(ctrl, win);
 			if (rootmenu != NULL && menu == NULL) {
 				if (menustate == STATE_POPUP) {
-					removepopped(ctrl);
-					menustate = STATE_NORMAL;
+					REMOVEPOPPED(ctrl);
 				}
 				menu = rootmenu;
 			}
 			if (menu == NULL)
 				break;
-			item = getitem(menu, getmenutype(ctrl, menu), pos, &ytop);
+			item = getitem(menu, getmenutype(ctrl, menu), pos, &y);
 			type = getmenutype(ctrl, menu);
 			timeout = -1;
+			if (item != menu->selected) {
+				oldsel = menu->selected;
+				menu->selected = item;
+				drawmenu(menu, oldsel, type, 0, 0);
+			}
 			if (item == NULL)
 				break;
 			if (item == &scrollup || item == &scrolldown) {
 				scrollwin = win;
-				menu->selected = item;
 				timeout = SCROLL_WAIT;
-				drawmenu(menu, type, 0);
 				break;
 			}
 			if (item == &tornoff) {
-				menu->selected = item;
-				drawmenu(menu, type, 0);
 				if (menustate == STATE_POPUP && ev.type == ButtonRelease) {
 					TAILQ_REMOVE(&ctrl->popupq, menu, entries);
 					insertmenu(&ctrl->tornoffq, menu->win, menu->rect, menu->queue, menu->caller, MENU_TORNOFF, 0);
 					delmenu(menu, 0);
-					removepopped(ctrl);
-					menustate = STATE_NORMAL;
+					REMOVEPOPPED(ctrl);
 				}
 				break;
-			}
-			if (item != menu->selected) {
-				menu->selected = item;
-				drawmenu(menu, type, 0);
 			}
 			gen = menugenerated(ctrl, item);  /* whether a menu was generated for this item */
 			if (menustate == STATE_POPUP && !gen && menu != TAILQ_FIRST(&ctrl->popupq) && TAILQ_FIRST(&ctrl->popupq) != NULL &&
@@ -760,81 +988,91 @@ nextevent:
 					delmenus(&ctrl->popupq, TAILQ_PREV(menu, MenuQueue, entries));
 				}
 			}
-selectitem:
-			if (!gen && (item->genscript != NULL || !TAILQ_EMPTY(&item->children))) {
-				ignorerelease = 0;
-				if (menustate != STATE_POPUP && ev.type == MotionNotify)
-					break;
-				if (menustate != STATE_POPUP) {
-					initpopped(ctrl, menu);
-					menustate = STATE_POPUP;
-				}
-				insertpopupmenu(&ctrl->popupq, menu->win, menu->rect, item, &item->children, ytop);
-			} else if (ev.type == ButtonRelease && item->genscript == NULL && TAILQ_EMPTY(&item->children)) {
-				enteritem(item);
-				if (menustate == STATE_POPUP) {
-					removepopped(ctrl);
-					menustate = STATE_NORMAL;
-				}
-			}
+			OPENITEM(ctrl, menu, item, type, gen, ev.type == MotionNotify, y);
 			break;
 		case KeyRelease:
 			if (ev.xkey.keycode == ctrl->altkey) {
 				if (menustate != STATE_ALTPRESSED)
 					break;
-				drawmenu(&ctrl->docked, MENU_DOCKAPP, 0);
+				drawmenu(&ctrl->docked, NULL, MENU_DOCKAPP, 0, 1);
 				ungrab();
 			}
 			break;
 		case KeyPress:
+			ksym = XkbKeycodeToKeysym(dpy, ev.xkey.keycode, 0, 0);
+			if (ksym == XK_Escape && menustate == STATE_POPUP) {
+				/* esc closes popped up menu when current menu is the root menu */
+				REMOVEPOPPED(ctrl);
+				break;
+			}
+			if (ksym == XK_Tab && (ev.xkey.state & ShiftMask)) {
+				/* Shift-Tab = ISO_Left_Tab */
+				ksym = XK_ISO_Left_Tab;
+			}
 			if (promptopen && ev.xkey.window == ctrl->promptwin) {
 				/* pass key to prompt */
 				operation = getoperation(ctrl->prompt, &ev.xkey, buf, INPUTSIZ, &ksym, &len);
 				promptkey(ctrl->prompt, buf, len, operation);
-			} else if (menustate != STATE_POPUP && ev.xkey.keycode == ctrl->runnerkey && (ev.xkey.state & MODS) == ctrl->runnermod) {
+			} else if (menustate != STATE_POPUP && (config.mode & MODE_RUNNER) &&
+			           ev.xkey.keycode == ctrl->runnerkey &&
+			           (ev.xkey.state & MODS) == ctrl->runnermod) {
 				/* open prompt */
 				mapprompt(ctrl->prompt);
 				redrawprompt(ctrl->prompt);
 				XFlush(dpy);
-			} else if (!promptopen && (item = matchacc(&ctrl->accq, ev.xkey.keycode, ev.xkey.state)) != NULL) {
+			} else if ((item = matchacc(&ctrl->accq, ev.xkey.keycode, ev.xkey.state)) != NULL) {
 				/* enter item via accelerator keychord */
 				enteritem(item);
 				if (menustate == STATE_POPUP) {
-					removepopped(ctrl);
-					menustate = STATE_NORMAL;
+					REMOVEPOPPED(ctrl);
 				}
-			} else if (ev.xkey.keycode == ctrl->altkey) {
+			} else if ((config.mode & MODE_DOCKAPP) && ev.xkey.keycode == ctrl->altkey) {
 				/* underline altchar on docked menu */
 				if (menustate == STATE_POPUP)
 					break;
 				menustate = STATE_ALTPRESSED;
 				grab(GRAB_KEYBOARD);
-				drawmenu(&ctrl->docked, MENU_DOCKAPP, 1);
-			} else if (ev.xkey.window == root) {
-				operation = getoperation(ctrl->prompt, &ev.xkey, buf, INPUTSIZ, &ksym, &len);
-				if (operation == CTRLCANCEL) {
-					removepopped(ctrl);
-					menustate = STATE_NORMAL;
+				drawmenu(&ctrl->docked, NULL, MENU_DOCKAPP, 1, 1);
+			} else {
+				menu = GETFIRSTMENU(ctrl);
+				if (menu == NULL)
 					break;
-				}
-				if (operation != INSERT)
+				type = getmenutype(ctrl, menu);
+				if (menustate == STATE_POPUP && (ksym == XK_Tab || ksym == XK_Down)) {
+					oldsel = menu->selected;
+					scrolled = itemcycle(menu, type, 1);
+					drawmenu(menu, oldsel, type, menu == &ctrl->docked && menustate == STATE_ALTPRESSED, scrolled);
+				} else if (menustate == STATE_POPUP && (ksym == XK_ISO_Left_Tab || ksym == XK_Up)) {
+					oldsel = menu->selected;
+					scrolled = itemcycle(menu, type, 0);
+					drawmenu(menu, oldsel, type, menu == &ctrl->docked && menustate == STATE_ALTPRESSED, scrolled);
+				} else if (menustate == STATE_POPUP && (ksym == XK_Return || ksym == XK_Right) && menu->selected != NULL) {
+					item = menu->selected;
+					ev.type = ButtonRelease;
+					OPENITEM(ctrl, menu, item, type, 0, 0, 0);
 					break;
-				if (menustate == STATE_ALTPRESSED || menustate == STATE_POPUP) {
+				} else if (menustate == STATE_POPUP && ksym == XK_Left && menu != TAILQ_LAST(&ctrl->popupq, MenuQueue)) {
+					delmenus(&ctrl->popupq, menu);
+					break;
+				} else if (ev.xkey.window == root && (menustate == STATE_ALTPRESSED || menustate == STATE_POPUP)) {
+					/* enter item via alt key */
 					if ((menu = TAILQ_FIRST(&ctrl->popupq)) == NULL)
 						menu = &ctrl->docked;
 					type = getmenutype(ctrl, menu);
-					if ((item = getaltitem(menu, ksym, type, &ytop)) == NULL)
+					if ((item = getaltitem(menu, ev.xkey.keycode, type, &y)) == NULL)
 						break;
+					oldsel = menu->selected;
 					menu->selected = item;
-					ev.type = ButtonRelease;
-					gen = 0;
 					if (menustate == STATE_ALTPRESSED) {
 						menustate = STATE_NORMAL;
 						ungrab();
 					}
-					drawmenu(menu, type, 1);
-					goto selectitem;
-				} else {
+					drawmenu(menu, oldsel, type, 1, 0);
+					OPENITEM(ctrl, menu, item, type, 0, 0, 0);
+				} else if ((config.mode & MODE_RUNNER) && ev.xkey.window == root) {
+					operation = getoperation(ctrl->prompt, &ev.xkey, buf, INPUTSIZ, &ksym, &len);
+					if (operation != INSERT)
+						break;
 					mapprompt(ctrl->prompt);
 					redrawprompt(ctrl->prompt);
 					promptkey(ctrl->prompt, buf, len, operation);
@@ -848,34 +1086,47 @@ selectitem:
 				break;
 			type = getmenutype(ctrl, menu);
 			configuremenu(menu, ev.xconfigure.x, ev.xconfigure.y, ev.xconfigure.width, ev.xconfigure.height);
-			drawmenu(menu, type, menu == &ctrl->docked && menustate == STATE_ALTPRESSED);
+			drawmenu(menu, NULL, type, menu == &ctrl->docked && menustate == STATE_ALTPRESSED, 1);
 			break;
 		case ClientMessage:
+			/* user may have closed tornoff window */
 			if ((Atom)ev.xclient.data.l[0] != atoms[WM_DELETE_WINDOW])
 				break;
-			/* user may have closed tornoff window */
-			if (ev.xclient.window == ctrl->promptwin) {
-				unmapprompt(ctrl->prompt);
-				break;
-			}
 			if ((menu = getmenu(&ctrl->tornoffq, ev.xclient.window)) == NULL)
 				break;
 			if (menustate == STATE_POPUP) {
-				removepopped(ctrl);
-				menustate = STATE_NORMAL;
+				REMOVEPOPPED(ctrl);
 			}
 			TAILQ_REMOVE(&ctrl->tornoffq, menu, entries);
 			delmenu(menu, 1);
 			break;
 		}
 		XAllowEvents(dpy, AsyncKeyboard, CurrentTime);
-		XAllowEvents(dpy, ReplayPointer, CurrentTime);
+		XAllowEvents(dpy, ctrl->passclick ? ReplayPointer : AsyncPointer, CurrentTime);
 		if (XPending(dpy)) {
 			goto nextevent;
 		}
 	} while ((ret = poll(&pfd, 1, timeout)) != -1);
+done:
+	cleanitems(itemq);
 	XAllowEvents(dpy, AsyncKeyboard, CurrentTime);
 	XAllowEvents(dpy, ReplayPointer, CurrentTime);
+}
+
+static void
+parseiconpaths(char *s)
+{
+	if (s == NULL) {
+		config.iconpath = NULL;
+		return;
+	}
+	config.iconpath = estrdup(s);
+	config.niconpaths = 0;
+	for (s = strtok(config.iconpath, ":"); s != NULL; s = strtok(NULL, ":")) {
+		if (config.niconpaths < MAXPATHS) {
+			config.iconpaths[config.niconpaths++] = s;
+		}
+	}
 }
 
 void
@@ -885,7 +1136,7 @@ enteritem(struct Item *item)
 
 	if (item == NULL)
 		return;
-	if (item->isgen) {
+	if (item->flags & ITEM_ISGEN) {
 		cmd = item->caller->cmd;
 		arg = (item->cmd != NULL) ? item->cmd : item->name;
 	} else {
@@ -908,15 +1159,67 @@ main(int argc, char *argv[])
 	struct Control ctrl;
 	struct ItemQueue itemq;
 	FILE *fp;
-	int c;
+	long n;
+	int i, c;
+	char *s, *name, *class;
 
+	config.niconpaths = 0;
+	parseiconpaths(getenv(ICONPATH));
 	xinit(argc, argv);
-	while ((c = getopt(argc, argv, "a:cditr:")) != -1) {
+	if ((s = getresource("faceName", NULL, NULL)) != NULL)
+		config.faceName = s;
+	for (i = 0; i < COLOR_LAST; i++) {
+		name = (i == COLOR_RUNNER ? "text" : NULL);
+		class = (i == COLOR_RUNNER ? "Text" : NULL);
+		if ((s = getresource("background", name, class)) != NULL)
+			config.colors[i].background = s;
+		if ((s = getresource("foreground", name, class)) != NULL)
+			config.colors[i].foreground = s;
+		if ((s = getresource("selbackground", name, class)) != NULL)
+			config.colors[i].selbackground = s;
+		if ((s = getresource("selforeground", name, class)) != NULL)
+			config.colors[i].selforeground = s;
+		if ((s = getresource("altforeground", name, class)) != NULL)
+			config.colors[i].altforeground = s;
+		if ((s = getresource("altselforeground", name, class)) != NULL)
+			config.colors[i].altselforeground = s;
+	}
+	if ((s = getresource("topShadowColor", NULL, NULL)) != NULL)
+		config.topShadow = s;
+	if ((s = getresource("bottomShadowColor", NULL, NULL)) != NULL)
+		config.bottomShadow = s;
+	if ((s = getresource("itemHeight", NULL, NULL)) != NULL &&
+	    (n = strtol(s, NULL, 10)) > 0 && n < 100)
+		config.itemheight = n;
+	if ((s = getresource("iconSize", NULL, NULL)) != NULL &&
+	    (n = strtol(s, NULL, 10)) > 0 && n < 100)
+		config.iconsize = n;
+	if ((s = getresource("shadowThickness", NULL, NULL)) != NULL &&
+	    (n = strtol(s, NULL, 10)) > 0 && n < 100)
+		config.shadowThickness = n;
+	if ((s = getresource("gap", NULL, NULL)) != NULL &&
+	    (n = strtol(s, NULL, 10)) > 0 && n < 100)
+		config.gap = n;
+	if ((s = getresource("maxItems", NULL, NULL)) != NULL &&
+	    (n = strtol(s, NULL, 10)) > 0 && n < 100)
+		config.max_items = n;
+	if ((s = getresource("alignment", NULL, NULL)) != NULL) {
+		if (strcasecmp(s, "center") == 0) {
+			config.alignment = ALIGN_CENTER;
+		} else if (strcasecmp(s, "left") == 0) {
+			config.alignment = ALIGN_LEFT;
+		} else if (strcasecmp(s, "right") == 0) {
+			config.alignment = ALIGN_RIGHT;
+		}
+	}
+	config.tornoff = isresourcetrue(getresource("tornoff", NULL, NULL));
+	while ((c = getopt(argc, argv, "a:c:ditr:")) != -1) {
 		switch (c) {
 		case 'a':
 			config.altkey = optarg;
 			break;
 		case 'c':
+			config.button = optarg;
 			config.mode |= MODE_CONTEXT;
 			break;
 		case 'd':
@@ -931,12 +1234,15 @@ main(int argc, char *argv[])
 			break;
 		case 'r':
 			config.runner = optarg;
+			config.mode |= MODE_RUNNER;
 			break;
 		default:
 			usage();
 			break;
 		}
 	}
+	if (!config.mode)
+		config.tornoff = 0;
 	argc -= optind;
 	argv += optind;
 	if (argc == 0)
@@ -951,7 +1257,9 @@ main(int argc, char *argv[])
 	} else {
 		usage();
 	}
+	initdc();
 	run(&ctrl, &itemq);
+	free(config.iconpath);
 	xclose();
 	return 0;
 }

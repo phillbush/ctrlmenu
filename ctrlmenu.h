@@ -10,19 +10,29 @@
 #include <X11/extensions/Xinerama.h>
 
 #define CLASS "CtrlMenu"
+#define NAME  "ctrlmenu"
 
 #define INPUTSIZ     1024
 #define PADDING                 7
 #define SEPARATOR_THICKNESS     1
 #define SEPARATOR_HEIGHT        (2 * PADDING + 2 * SEPARATOR_THICKNESS)
 #define LEN(x)                  (sizeof(x) / sizeof(*(x)))
+#define MAXPATHS                128          /* maximum number of paths to look for icons */
+#define ICONPATH                "ICONPATH"   /* environment variable name */
 
 struct Control;
 struct Prompt;
 
 enum {
+	ITEM_ISGEN      = 0x1,
+	ITEM_ICON       = 0x2,
+	ITEM_SELICON    = 0x4,
+};
+
+enum {
 	MODE_DOCKAPP    = 0x1,
 	MODE_CONTEXT    = 0x2,
+	MODE_RUNNER     = 0x4,
 };
 
 enum {
@@ -109,6 +119,12 @@ enum {
 	COLOR_ALT = 0x2,        /* color for alternate text */
 };
 
+enum {
+	COLOR_MENU,
+	COLOR_RUNNER,
+	COLOR_LAST
+};
+
 TAILQ_HEAD(ItemQueue, Item);
 struct Item {
 	TAILQ_ENTRY(Item) entries;
@@ -121,11 +137,13 @@ struct Item {
 	char *desc;                     /* item description */
 	char *cmd;                      /* command entered */
 	char *acc;                      /* accelerator */
+	char *file;                     /* path to icon file */
 	char *genscript;                /* commands piped to sh to generate entries */
 	unsigned int altpos, altlen;    /* alternative key sequence */
-	KeySym altkeysym;
+	Window icon[2];
+	KeySym altkey;
 	size_t len;
-	int isgen;
+	int flags;
 };
 
 TAILQ_HEAD(AcceleratorQueue, Accelerator);
@@ -149,51 +167,62 @@ struct Menu {
 	int overflow;                   /* whether the menu is higher than the monitor */
 	int maxwidth;                   /* maximum width of a text on the menu */
 	int isgen;                      /* whether menu was generated from a genscript */
+	int hasicon;                    /* whether menu has an entry with icon */
 };
 
 struct Config {
 	int (*fstrncmp)(const char *, const char *, size_t);
 	char *(*fstrstr)(const char *, const char *);
 	const char *faceName;
-	const char *runnerbackground;
-	const char *runnerforeground;
-	const char *runnerselbackground;
-	const char *runnerselforeground;
-	const char *runneraltforeground;
-	const char *runneraltselforeground;
-	const char *menubackground;
-	const char *menuforeground;
-	const char *menuselbackground;
-	const char *menuselforeground;
-	const char *menutopShadow;
-	const char *menubottomShadow;
-	const char *runner;
-	const char *altkey;
-	int number_items;
+	struct {
+		const char *background;
+		const char *foreground;
+		const char *selbackground;
+		const char *selforeground;
+		const char *altforeground;
+		const char *altselforeground;
+	} colors[COLOR_LAST];
+	const char *topShadow;
+	const char *bottomShadow;
+	char *iconpath;
+	char *runner;
+	char *altkey;
+	char *button;
+	int runnergroup;
+	int runnertsv;
+	int max_items;
+	int runner_items;
 	int tornoff;
-	int fontheight;
+	int itemheight;
+	int fontascent;
 	int shadowThickness;
 	int alignment;
 	int triangle_width;
 	int triangle_height;
+	int iconsize;
 	int mode;
+	int gap;
+
+	char *iconpaths[MAXPATHS];
+	int niconpaths;
 };
 
 struct DC {
+	FcPattern *pattern;
 	XftFont *face;
-	XftColor runnerbackground;
-	XftColor runnerforeground;
-	XftColor runnerselbackground;
-	XftColor runnerselforeground;
-	XftColor runneraltforeground;
-	XftColor runneraltselforeground;
-	XftColor menubackground;
-	XftColor menuforeground;
-	XftColor menuselbackground;
-	XftColor menuselforeground;
-	XftColor menutopShadow;
-	XftColor menubottomShadow;
+	XftFont **fonts;
+	struct {
+		XftColor background;
+		XftColor foreground;
+		XftColor selbackground;
+		XftColor selforeground;
+		XftColor altforeground;
+		XftColor altselforeground;
+	} colors[COLOR_LAST];
+	XftColor topShadow;
+	XftColor bottomShadow;
 	GC gc;
+	int nfonts;
 };
 
 extern struct DC dc;
@@ -221,12 +250,8 @@ void epipe(int fd[]);
 void eexecshell(const char *cmd, const char *arg);
 void edup2(int fd1, int fd2);
 pid_t efork(void);
-
-/* menu.c */
-void enteritem(struct Item *item);
-
-/* x.c */
 void xinit(int argc, char *argv[]);
+void initdc(void);
 void xclose(void);
 void getmonitors(void);
 void drawrectangle(Pixmap pix, XRectangle rect, unsigned int color);
@@ -235,6 +260,7 @@ void drawtriangle(Drawable pix, unsigned int color, int x, int y, int direction)
 void drawshadows(Pixmap pix, XRectangle rect, unsigned long top, unsigned long bot);
 void drawseparator(Drawable pix, int x, int y, int w, int dash);
 void commitdrawing(Window win, Pixmap pix, XRectangle rect);
+void copypixmap(Pixmap to, Pixmap from, XRectangle rect);
 void grabkey(KeyCode key, unsigned int mods);
 void ungrab(void);
 void freepixmap(Pixmap pix);
@@ -245,17 +271,24 @@ void grabbuttonsync(unsigned int button);
 int grab(int grabwhat);
 int textwidth(const char *text, int len);
 void translatecoordinates(Window win, short *x, short *y);
+void querypointer(int *x, int *y);
 XRectangle getselmon(XRectangle *rect);
 Window createwindow(XRectangle *rect, int type, const char *title);
 Pixmap createpixmap(XRectangle rect, Window win);
+Pixmap geticon(Window win, char *file, int issel, int color);
 KeyCode getkeycode(const char *str);
+int isresourcetrue(const char *val);
+char *getresource(const char *res, const char *name, const char *class);
 
-/* runner.c */
+/* prompt.c */
 int getoperation(struct Prompt *prompt, XKeyEvent *ev, char *buf, size_t bufsize, KeySym *ksym, int *len);
 KeySym getkeysym(const char *str);
-void *setprompt(struct ItemQueue *itemq, Window *win, int *state);
+void *setprompt(struct ItemQueue *itemq, Window *win, int *inited);
 void mapprompt(struct Prompt *prompt);
 void unmapprompt(struct Prompt *prompt);
 void drawprompt(struct Prompt *prompt);
 void redrawprompt(struct Prompt *prompt);
 void promptkey(struct Prompt *prompt, char *buf, int len, int operation);
+
+/* ctrlmenu.c */
+void enteritem(struct Item *item);
