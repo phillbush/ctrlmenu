@@ -1,0 +1,344 @@
+CTRLMENU(1)                 General Commands Manual                CTRLMENU(1)
+
+NAME
+     ctrlmenu – unified menu system for X11
+
+SYNOPSIS
+     ctrlmenu [-detr] [-a keysym] [-T format] [-R keychord] [-p position]
+              [-x buttonchord] [file]
+
+DESCRIPTION
+     ctrlmenu is a launcher and menu system for X.  It reads a text file
+     describing entries in a hierarchical menu, and creates input methods for
+     selecting and entering those entries.  When an entry is selected, its
+     respective command is printed to stdout.
+
+     If no file argument is given, or if it is a hyphen “-”, ctrlmenu reads
+     from standard input.
+
+     The options are as follows
+
+     -a keysym
+             Enable the altkey input.  The argument keysym must be the key
+             symbol for the alt key (none by default).  Despite its name, this
+             key can be any key.
+
+     -d      Enable the dockapp.  This option makes show a docked menu on the
+             window manager's dock.
+
+     -e      Instead of printing the selected entry to standard output, run it
+             on "sh".
+
+     -T format
+             This option specifies the format of the content to be passed to
+             the RUNNER program.  Its value is a comma-separated list of
+             formatting options.  Only two formatting options are supported:
+             “tsv” and “group”.  The “tsv” format outputs to the runner tab-
+             separated entries, one per line; the first field is the entry
+             name, the second is its description, and the third is the entry's
+             command.  The “group” format outputs to the runner entries
+             grouped in blocks separated with blank lines.  Each block has
+             entries belonging to the same submenu, and begins with a line
+             naming the menu itself.  dmenu
+
+     -t      Enable tornoff menus.  This option can only be used together with
+             -d and/or -x.
+
+     -R keychord
+             The argument keychord must be the keychord to invoke the runner
+             (A-space, by default).  The keychord must be a keysym, prefixed
+             with C- (for Control), S- (for Shift), A- (for Alt), W- (for
+             Super/Win).
+
+     -r      Enable passing the entries to a runner.
+
+     -x buttonspec
+             Enable root menu.  This option makes ctrlmenu show the menu when
+             clicking on the desktop or clicking anywhere with a given
+             modifier.  The argument buttonspec must be an optional button
+             number (or nothing for button 3, the right button), prefixed with
+             C- (for Control), S- (for Shift), A- (for Alt), W- (for
+             Super/Win), N- (for no modifier, making any press spawn the
+             menu), or nothing (for no modifier, making only presses to the
+             root window spawn the menu).  The button spec can be also
+             suffixed with the letter P to indicate that the click to the root
+             window should be passed to other clients.
+
+     Each line read from the specified file or stdin can be a separator, a
+     terminal entry, a common meta-entry, or a pipe meta-entry.  Any blank
+     around an entry is ignored.  The format of an entry is as follows:
+
+           ENTRY       := SEPARATOR | TERMINAL | META | PIPE
+           SEPARATOR   := "--\n"
+           TERMINAL    := NAME ["--" COMMAND] "\n"
+           META        := NAME "{\n" ENTRIES... "}\n"
+           PIPE        := NAME "--" COMMAND "{\n" SCRIPT "}\n"
+
+     Separator
+             A separator is an anonymous, non-selectable entry in the menu.
+             Separators are composed by a line with only two dashes in it.
+
+     Terminal Entry
+             A terminal entry is a line composed by a name, and an optional
+             command after two dashes.  A terminal entry appears as an entry
+             in the menu which, when selected, outputs its command (or its
+             name, if the command is not provided).  A terminal entry ends in
+             a newline.
+
+     Common Meta-Entry
+             A common meta-entry is a line composed by a name followed by an
+             open curly bracket, then a sequence of other entries, followed by
+             a close curly bracket.  A common meta-entry appears as an entry
+             in the menu which, when selected, opens a submenu.  A common
+             meta-entry ends in a newline.
+
+     Pipe Meta-Entry
+             A pipe meta-entry is a line composed by a name followed two
+             dashes and a command.  Then a shell script between curly braces.
+             A pipe meta-entry appears as an entry in the menu which, when
+             selected, runs the corresponding shell script whose output is
+             read for menu entries.  Only terminal entries and separators can
+             be read from the running script.  A pipe meta-entry ends in a
+             newline.
+
+     The name can end in a string between braces, which are used for
+     extensions (the only extensions supported are keybinding, descriptions
+     and icons).  The format of a name is as follows:
+
+           NAME        := LABEL [ "[" LIST "]" ]
+           LIST        := | EXTENSION ":" LIST
+           EXTENSION   := KEYBINDING | ICON | DESCRIPTION
+           ICON        := "#" PATH
+           KEYBINDING  := "!" ("S-" | "C-" | "A-" | "W-") KEYSYM
+           DESCRIPTION := STRING
+
+     The LABEL is the string that will appear in the menu.  The label can
+     contain a underscore (“_”) before a character to indicate that this
+     character should be underlined on the menu, and that pressing the key
+     corresponding to that character selecs the item.  The extension list is a
+     colon-separated list of extensions between braces.
+
+     An icon is the path to a icon to be displayed in the menu before the
+     label.  The path must be prefixed with a “#” character to indicate that
+     it is the path to an icon.
+
+     A keybinding is a sequence of modifiers and a key symbol to be bound for
+     the menu entry.  The keybinding must be prefixed with a “!” character to
+     indicate that it is a keybinding.  When the corresponding key is pressed
+     along with the given modifiers, the respective entry is selected.  A
+     keybinding has the following form.  An “S-” prefix indicates that the
+     Shift key modifier is active.  An “C-” prefix indicates that the Control
+     key modifier is active.  An “A-” prefix indicates that the Alt key
+     modifier is active.  An “W-” prefix indicates that the Super (Also known
+     as “windows key”) key modifier is active.  The keysym that forms the
+     ending of the keybinding is one of the keysyms listed at the
+     /usr/X11R6/include/X11/keysymdef.h file (/usr/include/X11/keysymdef.h in
+     some systems.)
+
+     The description is a comment for the item to be piped to the runner
+     application.  The description has no prefix and should be the last
+     extension on the extension list.
+
+USAGE
+     The following input methods are provided by ctrlmenu
+
+     Docked Menu
+             The docked menu is an always-visible dockapp window that displays
+             a list of menus on the window manager's dock.  The docked menu is
+             only displayed when using the -d command-line option.  The docked
+             menu only works on window managers that docks dockapps, such as
+             fluxbox(1).
+
+     Context Menu
+             The context menu is a menu that pops up when the user right-
+             clicks the desktop.  The context menu is only displayed when
+             using the -x command-line option.
+
+     Tornoff Menu
+             A tornoff menu is a menu that appears as a regular window.  A
+             tornoff menu is created after selecting the dashed line at the
+             top of a popped up menu.  This dashed line only appears when
+             using the -t command-line option.
+
+     Alt Key Sequences
+             Each menu entry can be bound to a character.  After pressing the
+             alt key (set with the -a command-line option), it is possible to
+             navigate the menus by pressing the letters of entries in
+             sequence.
+
+     Accelerator key chords
+             Each menu entry can be bound to a key chord.  Pressing a key
+             chord enters the entry bound to it.
+
+     Runner  The runner is an interactive filter program (like dmenu(1) or
+             xprompt(1)) that lists and filters its input as the user types
+             for an entry.  A runner program can be invoked by ctrlmenu by
+             pressing a key chord specified with the -R command-line option;
+             and all menu entries will be given to the runner's stdin.  The
+             runner can only be invoked when using the -r command-line option.
+             The runner program is specified by the RUNNER environment
+             variable.  The format of the content to be passed to the runner
+             is specified by the -T command-line option.
+
+     Any menu (either the docked menu, the context menu, a tornoff menu or a
+     popped up menu) can be browsed with the mouse, and each entry can then be
+     clicked to be selected.  After a submenu is opened, they can be navigated
+     either using the mouse or one of the following keys:
+
+     Home    Select the first item in the menu.
+
+     End     Select the last item in the menu.
+
+     Down, Tab
+             Cycle through the items in the regular direction.
+
+     Up, Shift-Tab
+             Cycle through the items in the reverse direction.
+
+     Right, Enter
+             Select the highlighted item.
+
+     Left    Go to the parent menu.
+
+     Esc     Close any open pop up menu.
+
+RESOURCES
+     ctrlmenu understands the following X resources.
+
+     ctrlmenu.faceName
+             The typeface to write text with.
+
+     ctrlmenu.itemHeight
+             The height in pixels of each item in the menus.  Default is 24
+             pixels.
+
+     ctrlmenu.iconSize
+             The size in pixels of the icon of items.  Default is 16 pixels.
+
+     ctrlmenu.igoreCase
+             If set to “true”, ignores case on the runner.
+
+     ctrlmenu.runnersize
+             The size of the runner.
+
+     ctrlmenu.background
+             The background color of non-selected entries in the menus.
+
+     ctrlmenu.foreground
+             The color of the label text of non-selected entries in the menus.
+
+     ctrlmenu.inputforeground
+             The color of the text in the input field.
+
+     ctrlmenu.inputbackground
+             The color of the input field.
+
+     ctrlmenu.altforeground
+             The color of the descriptive text of non-selected entries in the
+             menus.
+
+     ctrlmenu.altselforeground
+             The color of the descriptive text of selected entries in the
+             menus.
+
+     ctrlmenu.selbackground
+             The background color of selected entries in the menus.
+
+     ctrlmenu.selforeground
+             The color of the label text of selected entries in the menus.
+
+     ctrlmenu.topShadow
+             The color of the top shadow around the menu
+
+     ctrlmenu.bottomShadow
+             The color of the bottom shadow around the menu.
+
+     ctrlmenu.shadowThickness
+             Thickness of the 3D shadow effect.
+
+     ctrlmenu.gap
+             The gap, in pixels, between the menus.
+
+     ctrlmenu.alignment
+             If set to left, center, or right, text is aligned to the left,
+             center, or right of the menu, respectively.  By default, text is
+             aligned to the left.
+
+     ctrlmenu.maxItems
+             The maximum number of items to be displayed in a menu.  If a menu
+             has more items than that value, the menu will feature arrow
+             buttons for scrolling.
+
+     ctrlmenu.altKeysym
+             The key symbol to highlight the alt characters on the menu
+             entries.
+
+     ctrlmenu.runnerKeychord
+             The keybinding to open the runner program.  Equivalent to the -R
+             command-line option.
+
+ENVIRONMENT
+     The following environment variables affect the execution of ctrlmenu.
+
+     DISPLAY
+             The display to start ctrlmenu on.
+
+     ICONPATH
+             A colon-separated list of paths to look for icons.
+
+     RUNNER  The invocation of the runner program.  The value of this
+             environment variable defaults to “dmenu -i”.
+
+EXAMPLE
+     Consider the following script:
+
+           #!/bin/sh
+
+           ctrlmenu -e -x "W-3" <<EOF
+           _Applications {
+                   _Web Browser [#./icons/web.png]  -- firefox
+                   _Image Editor [#./icons/web.png] -- gimp
+           }
+           _Terminals {
+                   Terminal (_xterm) [!A-T] -- xterm
+                   Terminal (_urxvt) [!A-U] -- urxvt
+                   Terminal (_st)    [!A-S] -- st
+           }
+           --
+           _Users -- finger "" {
+                   sed 's/:.*//' /etc/passwd
+           }
+           _System {
+                   _Shutdown  -- poweroff
+                   _Reboot    -- reboot
+           }
+           EOF
+
+     In this example, ctrlmenu is invoked with the -e command-line option,
+     which makes the command of the selected entry to be run in sh(1).  It is
+     also invoked with the -x W-3 command-line option, which makes the main
+     menu pop up when right-clicking on the root window (ie', the desktop), or
+     when right-clicking anywhere with the Win (Super) key.
+
+     This example creates a menu with four entries: “Applications”,
+     “Terminal”, “Users”, and “System”.  The first two entries are separated
+     from the last two with a separator.
+
+     The underline on the names of those entries indicates that pressing the
+     key corresponding to the character after the underline selects the item.
+     For example, pressing “S” opens the “System” submenu, and then pressing
+     “R” selects the “Reboot” entry.
+
+     On the “Applications” menu, the entries have icons specified between
+     braces and after the “#” character.
+
+     On the “Terminals” menu, the entries have keybindings specified between
+     braces and after the “!” character.  That means that, for example,
+     pressing Alt-T opens xterm(1).
+
+     The “users” menu is a pipe meta-entry.  Selecting it opens a menu whose
+     entries are read from the sed(1) command, which prints the user field of
+     the /etc/passwd file.  Selecting an entry in this menu fingers the
+     corresponding user.
+
+OpenBSD 7.2                   September 28, 2022                   OpenBSD 7.2

@@ -675,35 +675,14 @@ draw(struct Control *ctrl, Window win)
 	}
 }
 
-static struct Item *
-getaltitem(struct Menu *menu, KeyCode key, int menutype, int *ytop)
-{
-	struct Item *item;
-
-	if (key == 0 || menu == NULL)
-		return NULL;
-	if (menutype == MENU_POPUP)
-		*ytop = config.shadowThickness + TORNOFF_HEIGHT;
-	else
-		*ytop = 0;
-	if (menu->overflow)
-		*ytop += SEPARATOR_HEIGHT;
-	TAILQ_FOREACH(item, menu->queue, entries) {
-		if (key == item->altkey)
-			return item;
-		*ytop += (item->name != NULL) ? config.itemheight : SEPARATOR_HEIGHT;
-	}
-	return NULL;
-}
-
 static int
-itemcycle(struct Menu *menu, int menutype, int forward)
+itemcycle(struct Menu *menu, int type, int forward)
 {
 	struct Item *item, *prev, *oldfirst;
 	int h, end, y;
 
 	end = h = SEPARATOR_HEIGHT;
-	if (menutype == MENU_POPUP) {
+	if (type == MENU_POPUP) {
 		h += config.shadowThickness + TORNOFF_HEIGHT;
 		end += config.shadowThickness;
 	}
@@ -784,6 +763,45 @@ itemcycle(struct Menu *menu, int menutype, int forward)
 	}
 done:
 	return oldfirst != menu->first;
+}
+
+#define LOOPYTOP(menu, type, item, ytop, cond, retfound, retdef)                                 \
+	do {                                                                                     \
+		if ((type) == MENU_POPUP)                                                        \
+			(ytop) = config.shadowThickness + TORNOFF_HEIGHT;                        \
+		else                                                                             \
+			(ytop) = 0;                                                              \
+		if ((menu)->overflow)                                                            \
+			(ytop) += SEPARATOR_HEIGHT;                                              \
+		TAILQ_FOREACH((item), (menu)->queue, entries) {                                  \
+			if ((cond))                                                              \
+				return (retfound);                                               \
+			(ytop) += ((item)->name != NULL) ? config.itemheight : SEPARATOR_HEIGHT; \
+		}                                                                                \
+		return (retdef);                                                                 \
+	} while(0);
+
+static struct Item *
+getaltitem(struct Menu *menu, KeyCode key, int type, int *ytop)
+{
+	struct Item *item;
+
+	if (key == 0 || menu == NULL)
+		return NULL;
+	LOOPYTOP(menu, type, item, *ytop, (key == item->altkey), item, NULL);
+	return NULL;
+}
+
+static int
+getypos(struct Menu *menu, int type)
+{
+	struct Item *item;
+	int ytop;
+
+	if (menu == NULL)
+		return 0;
+	LOOPYTOP(menu, type, item, ytop, (item == menu->selected), ytop, 0);
+	return 0;
 }
 
 #define REMOVEPOPPED(ctrl)                \
@@ -1035,23 +1053,23 @@ nextevent:
 				drawmenu(&ctrl->docked, NULL, MENU_DOCKAPP, 1, 1);
 			} else {
 				menu = GETFIRSTMENU(ctrl);
-				if (menu == NULL)
-					break;
-				type = getmenutype(ctrl, menu);
-				if (menustate == STATE_POPUP && (ksym == XK_Tab || ksym == XK_Down)) {
+				if (menu != NULL)
+					type = getmenutype(ctrl, menu);
+				if (menu != NULL && menustate == STATE_POPUP && (ksym == XK_Tab || ksym == XK_Down)) {
 					oldsel = menu->selected;
 					scrolled = itemcycle(menu, type, 1);
 					drawmenu(menu, oldsel, type, menu == &ctrl->docked && menustate == STATE_ALTPRESSED, scrolled);
-				} else if (menustate == STATE_POPUP && (ksym == XK_ISO_Left_Tab || ksym == XK_Up)) {
+				} else if (menu != NULL && menustate == STATE_POPUP && (ksym == XK_ISO_Left_Tab || ksym == XK_Up)) {
 					oldsel = menu->selected;
 					scrolled = itemcycle(menu, type, 0);
 					drawmenu(menu, oldsel, type, menu == &ctrl->docked && menustate == STATE_ALTPRESSED, scrolled);
-				} else if (menustate == STATE_POPUP && (ksym == XK_Return || ksym == XK_Right) && menu->selected != NULL) {
+				} else if (menu != NULL && menustate == STATE_POPUP && (ksym == XK_Return || ksym == XK_Right) && menu->selected != NULL) {
 					item = menu->selected;
+					y = getypos(menu, type);
 					ev.type = ButtonRelease;
-					OPENITEM(ctrl, menu, item, type, 0, 0, 0);
+					OPENITEM(ctrl, menu, item, type, 0, 0, y);
 					break;
-				} else if (menustate == STATE_POPUP && ksym == XK_Left && menu != TAILQ_LAST(&ctrl->popupq, MenuQueue)) {
+				} else if (menu != NULL && menustate == STATE_POPUP && ksym == XK_Left && menu != TAILQ_LAST(&ctrl->popupq, MenuQueue)) {
 					delmenus(&ctrl->popupq, menu);
 					break;
 				} else if (ev.xkey.window == root && (menustate == STATE_ALTPRESSED || menustate == STATE_POPUP)) {
@@ -1068,7 +1086,7 @@ nextevent:
 						ungrab();
 					}
 					drawmenu(menu, oldsel, type, 1, 0);
-					OPENITEM(ctrl, menu, item, type, 0, 0, 0);
+					OPENITEM(ctrl, menu, item, type, 0, 0, y);
 				} else if ((config.mode & MODE_RUNNER) && ev.xkey.window == root) {
 					operation = getoperation(ctrl->prompt, &ev.xkey, buf, INPUTSIZ, &ksym, &len);
 					if (operation != INSERT)

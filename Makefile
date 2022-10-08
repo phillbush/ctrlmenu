@@ -23,6 +23,9 @@ ${PROG}: ${OBJS}
 
 ${OBJS}: ctrlmenu.h
 
+README: ctrlmenu.1
+	man -l ctrlmenu.1 | sed 's/.//g' >README
+
 tags: ${SRCS}
 	ctags ${SRCS}
 
