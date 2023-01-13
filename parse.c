@@ -320,7 +320,7 @@ static void
 parsebraces(struct ParseData *parse, struct Item *item, struct AcceleratorQueue *accq)
 {
 	struct Accelerator *acc;
-	size_t len;
+	size_t len, i;
 	unsigned int mods;
 	char *file, *accstr, *desc, *p;
 
@@ -358,6 +358,9 @@ parsebraces(struct ParseData *parse, struct Item *item, struct AcceleratorQueue 
 			}
 			accstr += 2;
 		}
+		for (i = 0; !isblank(accstr[i]); i++)
+			;
+		accstr[i] = '\0';
 		if (accq != NULL) {
 			acc = newaccelerator(accstr, mods, item);
 			TAILQ_INSERT_HEAD(accq, acc, entries);
@@ -437,8 +440,8 @@ parseitemrec(struct ParseData *parse, struct Item *parent, struct AcceleratorQue
 		.genscript = NULL,
 		.flags = 0,
 		.file = NULL,
-		.icon[0]= None,
-		.icon[1]= None,
+		.icon = None,
+		.mask = None,
 	};
 	TAILQ_INIT(&item->children);
 	if (check(parse, TOK_CMD)) {
@@ -490,9 +493,10 @@ parselistrec(struct ParseData *parse, struct ItemQueue *itemq, struct Item *pare
 }
 
 static struct Item *
-parseitemonce(struct ParseData *parse, struct Item *caller)
+parsepipeditem(char *buf, struct Item *caller)
 {
 	struct Item *item;
+	char *s;
 
 	item = emalloc(sizeof(*item));
 	*item = (struct Item){
@@ -507,70 +511,57 @@ parseitemonce(struct ParseData *parse, struct Item *caller)
 		.genscript = NULL,
 		.flags = ITEM_ISGEN,
 		.file = NULL,
-		.icon[0]= None,
-		.icon[1]= None,
+		.icon= None,
+		.mask= None,
 	};
 	TAILQ_INIT(&item->children);
-	if (check(parse, TOK_CMD)) {
-		/*
-		 * A line with only "--" is a separator.
-		 * Just consume the "--" back and ignore everything after it.
-		 */
-		consume(parse, TOK_CMD);
+	if ((s = strchr(buf, '\t')) != NULL) {
+		*s = '\0';
+		item->name = estrdup(buf);
+		item->len = strlen(item->name);
+		buf = s + 1;
+		if ((s = strchr(buf, '\t')) != NULL) {
+			*s = '\0';
+			item->desc = estrdup(buf);
+			buf = s + 1;
+		}
+		item->cmd = estrdup(buf);
 	} else {
-		parsename(parse, item);
-		if (check(parse, TOK_OPENSQUARE)) {
-			consume(parse, TOK_OPENSQUARE);
-			parsebraces(parse, item, NULL);
-			consume(parse, TOK_CLOSESQUARE);
-		}
-		if (check(parse, TOK_CMD)) {
-			parsecmd(parse, item);
-		}
+		item->name = estrdup(buf);
+		item->len = strlen(item->name);
 	}
-	consume(parse, TOK_NEWLINE);
 	return item;
 }
 
 static void
-parselistonce(struct ParseData *parse, struct ItemQueue *itemq, struct Item *caller)
+parsepipe(struct ParseData *parse, struct ItemQueue *itemq, struct Item *caller)
 {
 	struct Item *item;
-	int toktype;
+	ssize_t linelen;
+	size_t linesize = 0;
+	char *line = NULL;
+	char *s;
 
 	TAILQ_INIT(itemq);
-	while((toktype = gettok(parse)) != TOK_EOF) {
-		if (toktype == TOK_NEWLINE)     /* consume blank lines */
+	while ((linelen = getline(&line, &linesize, parse->fp)) != -1) {
+		s = line;
+		while (isblank(*(unsigned char *)s))
+			s++;
+		if (*s == '\n' || *s == '\0')
 			continue;
-		ungettok(parse, toktype);
-		if ((item = parseitemonce(parse, caller)) == NULL)
+		s[strcspn(s, "\n")] = '\0';
+		if ((item = parsepipeditem(s, caller)) == NULL)
 			break;
 		TAILQ_INSERT_TAIL(itemq, item, entries);
 	}
-	ungettok(parse, toktype);
 }
 
 void
-readpipe(struct ItemQueue *itemq, struct Item *caller)
+readpipe(FILE *fp, struct ItemQueue *itemq, struct Item *caller)
 {
 	struct ParseData parse;
-	FILE *fp;
-	int fd[2];
 	char buf[BUFSIZE];
 
-	epipe(fd);
-	if (efork() == 0) {      /* child */
-		close(fd[0]);
-		if (fd[1] != STDOUT_FILENO)
-			edup2(fd[1], STDOUT_FILENO);
-		eexecshell(caller->genscript, NULL);
-		exit(1);
-	}
-	if ((fp = fdopen(fd[0], "r")) == NULL) {
-		warnx("could open file pointer");
-		return;
-	}
-	close(fd[1]);
 	buf[0] = '\0';
 	parse = (struct ParseData){
 		.fp = fp,
@@ -588,13 +579,68 @@ readpipe(struct ItemQueue *itemq, struct Item *caller)
 		.toksize = 0,
 		.alt = NULL,
 	};
-	parselistonce(&parse, itemq, caller);
+	parsepipe(&parse, itemq, caller);
 	fclose(fp);
 	free(parse.toktext);
 	wait(NULL);
 	if (parse.error) {
 		cleanitems(itemq);
 	}
+}
+
+void
+genmenu(struct ItemQueue *itemq, struct Item *caller)
+{
+	FILE *fp;
+	int fd[2];
+
+	epipe(fd);
+	if (efork() == 0) {      /* child */
+		close(fd[0]);
+		if (fd[1] != STDOUT_FILENO)
+			edup2(fd[1], STDOUT_FILENO);
+		eexecshell(caller->genscript, NULL);
+		exit(1);
+	}
+	if ((fp = fdopen(fd[0], "r")) == NULL) {
+		warnx("could open file pointer");
+		return;
+	}
+	close(fd[1]);
+	readpipe(fp, itemq, caller);
+}
+
+void
+runcalc(struct ItemQueue *itemq, char *text)
+{
+	FILE *fp[2];
+	int fd[2][2];
+
+	epipe(fd[0]);
+	epipe(fd[1]);
+	if (efork() == 0) {      /* child */
+		close(fd[0][1]);
+		close(fd[1][0]);
+		if (fd[0][0] != STDIN_FILENO)
+			edup2(fd[0][0], STDIN_FILENO);
+		if (fd[1][1] != STDOUT_FILENO)
+			edup2(fd[1][1], STDOUT_FILENO);
+		eexeccmd(calculator, NULL);
+		exit(1);
+	}
+	close(fd[0][0]);
+	close(fd[1][1]);
+	if ((fp[0] = fdopen(fd[0][1], "w")) == NULL) {
+		warnx("could open file pointer");
+		return;
+	}
+	if ((fp[1] = fdopen(fd[1][0], "r")) == NULL) {
+		warnx("could open file pointer");
+		return;
+	}
+	fprintf(fp[0], "%s\n", text);
+	fclose(fp[0]);
+	readpipe(fp[1], itemq, NULL);
 }
 
 void
@@ -617,10 +663,10 @@ cleanitems(struct ItemQueue *itemq)
 			free(item->file);
 		cleanitems(&item->children);
 		TAILQ_REMOVE(itemq, item, entries);
-		if (item->icon[0] != None)
-			XFreePixmap(dpy, item->icon[0]);
-		if (item->icon[1] != None)
-			XFreePixmap(dpy, item->icon[1]);
+		if (item->icon != None)
+			XFreePixmap(dpy, item->icon);
+		if (item->mask != None)
+			XFreePixmap(dpy, item->mask);
 		free(item);
 	}
 }

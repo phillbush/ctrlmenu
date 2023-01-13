@@ -6,19 +6,17 @@
 .Nd unified menu system for X11
 .Sh SYNOPSIS
 .Nm
-.Op Fl detr
+.Op Fl dit
 .Op Fl a Ar keysym
-.Op Fl T Ar format
-.Op Fl R Ar keychord
-.Op Fl p Ar position
-.Op Fl x Ar buttonchord
+.Op Fl r Ar keychord
+.Op Fl x Ar buttonspec
 .Op Ar file
 .Sh DESCRIPTION
 .Nm
 is a launcher and menu system for X.
 It reads a text file describing entries in a hierarchical menu,
 and creates input methods for selecting and entering those entries.
-When an entry is selected, its respective command is printed to stdout.
+When an entry is selected, its respective command is run.
 .Pp
 If no
 .Ar file
@@ -35,39 +33,29 @@ The argument
 .Ar keysym
 must be the key symbol for the alt key (none by default).
 Despite its name, this key can be any key.
+See the section
+.Sx USAGE
+for more information on the alt key.
 .It Fl d
 Enable the dockapp.
 This option makes
 .Dn
 show a docked menu on the window manager's dock.
-.It Fl e
-Instead of printing the selected entry to standard output,
-run it on "sh".
-.It Fl T Ar format
-This option specifies the format of the content to be passed to the
-.Ev RUNNER
-program.
-Its value is a comma-separated list of formatting options.
-Only two formatting options are supported:
-.Dq Ic "tsv"
-and
-.Dq Ic "group" .
-The
-.Dq Ic "tsv"
-format outputs to the runner tab-separated entries, one per line;
-the first field is the entry name, the second is its description, and the third is the entry's command.
-The
-.Dq Ic "group"
-format outputs to the runner entries grouped in blocks separated with blank lines.
-Each block has entries belonging to the same submenu, and begins with a line naming the menu itself.
-.Xr dmenu
+See the section
+.Sx USAGE
+for more information on the docked menu.
+.It Fl i
+Match entries case insensitively on the runner.
 .It Fl t
 Enable tornoff menus.
 This option can only be used together with
 .Fl d
 and/or
 .Fl x .
-.It Fl R Ar keychord
+See the section
+.Sx USAGE
+for more information on the tornoff menus.
+.It Fl r Ar keychord
 The argument
 .Ar keychord
 must be the keychord to invoke the runner
@@ -82,8 +70,9 @@ The keychord must be a keysym, prefixed with
 (for Alt),
 .Sy W-
 (for Super/Win).
-.It Fl r
-Enable passing the entries to a runner.
+See the section
+.Sx USAGE
+for more information on the runner.
 .It Fl x Ar buttonspec
 Enable root menu.
 This option makes
@@ -110,6 +99,9 @@ or nothing
 The button spec can be also suffixed with the letter
 .Sy "P"
 to indicate that the click to the root window should be passed to other clients.
+See the section
+.Sx USAGE
+for more information on the root menu.
 .El
 .Pp
 Each line read from the specified file or stdin can be a separator,
@@ -133,7 +125,7 @@ Separators are composed by a line with only two dashes in it.
 A terminal entry is a line composed by a name,
 and an optional command after two dashes.
 A terminal entry appears as an entry in the menu which,
-when selected, outputs its command
+when selected, runs its command
 (or its name, if the command is not provided).
 A terminal entry ends in a newline.
 .It Common Meta-Entry
@@ -173,7 +165,7 @@ before a character to indicate that this character should be underlined
 on the menu, and that pressing the key corresponding to that character selecs the item.
 The extension list is a colon-separated list of extensions between braces.
 .Pp
-An icon is the path to a icon to be displayed in the menu before the label.
+An icon is the path to an xpm (pixmap) icon to be displayed in the menu before the label.
 The path must be prefixed with a
 .Dq "#"
 character to indicate that it is the path to an icon.
@@ -227,9 +219,9 @@ command-line option.
 The docked menu only works on window managers that docks dockapps,
 such as
 .Xr fluxbox 1 .
-.It Context Menu
-The context menu is a menu that pops up when the user right-clicks the desktop.
-The context menu is only displayed when using the
+.It Root Menu
+The root menu is a menu that pops up when the user right-clicks the desktop.
+The root menu is only displayed when using the
 .Fl x
 command-line option.
 .It Tornoff Menu
@@ -253,24 +245,14 @@ The runner is an interactive filter program (like
 or
 .Xr xprompt 1 )
 that lists and filters its input as the user types for an entry.
-A runner program can be invoked by
+The runner opens
 .Nm
 by pressing a key chord specified with the
-.Fl R
-command-line option;
-and all menu entries will be given to the runner's stdin.
-The runner can only be invoked when using the
 .Fl r
-command-line option.
-The runner program is specified by the
-.Ev RUNNER
-environment variable.
-The format of the content to be passed to the runner is specified by the
-.Fl T
 command-line option.
 .El
 .Pp
-Any menu (either the docked menu, the context menu, a tornoff menu or a popped up menu)
+Any menu (either the docked menu, the root menu, a tornoff menu or a popped up menu)
 can be browsed with the mouse, and each entry can then be clicked to be selected.
 After a submenu is opened, they can be navigated either using the mouse or one of the following keys:
 .Bl -tag -width Ds
@@ -295,42 +277,36 @@ understands the following X resources.
 .Bl -tag -width Ds
 .It Ic "ctrlmenu.faceName"
 The typeface to write text with.
+.It Ic "ctrlmenu.menu.background" , Ic "ctrlmenu.text.background"
+The colors of the background of the menu and the runner.
+.It Ic "ctrlmenu.menu.foreground" , Ic "ctrlmenu.text.foreground"
+The colors of the foreground of the menu and the runner.
+.It Ic "ctrlmenu.menu.selbackground" , Ic "ctrlmenu.text.selbackground"
+The colors of the background of the menu and the runner for selected entries.
+.It Ic "ctrlmenu.menu.selforeground" , Ic "ctrlmenu.text.selforeground"
+The colors of the foreground of the menu and the runner for selected entries.
+.It Ic "ctrlmenu.menu.altforeground" , Ic "ctrlmenu.text.altforeground"
+The colors of the foreground of the menu and the runner for alternate (comment) text.
+.It Ic "ctrlmenu.menu.altselforeground" , Ic "ctrlmenu.text.altselforeground"
+The colors of the foreground of the menu and the runner for alternate (comment) text in selected entries.
+.It Ic "ctrlmenu.topShadow"
+The color of the top shadow around the menu
+.It Ic "ctrlmenu.bottomShadow"
+The color of the bottom shadow around the menu.
 .It Ic "ctrlmenu.itemHeight"
 The height in pixels of each item in the menus.
 Default is 24 pixels.
 .It Ic "ctrlmenu.iconSize"
 The size in pixels of the icon of items.
 Default is 16 pixels.
-.It Ic "ctrlmenu.igoreCase"
-If set to
-.Dq "true" ,
-ignores case on the runner.
-.It Ic "ctrlmenu.runnersize"
-The size of the runner.
-.It Ic "ctrlmenu.background"
-The background color of non-selected entries in the menus.
-.It Ic "ctrlmenu.foreground"
-The color of the label text of non-selected entries in the menus.
-.It Ic "ctrlmenu.inputforeground"
-The color of the text in the input field.
-.It Ic "ctrlmenu.inputbackground"
-The color of the input field.
-.It Ic "ctrlmenu.altforeground"
-The color of the descriptive text of non-selected entries in the menus.
-.It Ic "ctrlmenu.altselforeground"
-The color of the descriptive text of selected entries in the menus.
-.It Ic "ctrlmenu.selbackground"
-The background color of selected entries in the menus.
-.It Ic "ctrlmenu.selforeground"
-The color of the label text of selected entries in the menus.
-.It Ic "ctrlmenu.topShadow"
-The color of the top shadow around the menu
-.It Ic "ctrlmenu.bottomShadow"
-The color of the bottom shadow around the menu.
 .It Ic "ctrlmenu.shadowThickness"
 Thickness of the 3D shadow effect.
 .It Ic "ctrlmenu.gap"
 The gap, in pixels, between the menus.
+.It Ic "ctrlmenu.maxItems"
+The maximum number of items to be displayed in a menu.
+If a menu has more items than that value,
+the menu will feature arrow buttons for scrolling.
 .It Ic "ctrlmenu.alignment"
 If set to
 .Sy "left" Ns ,
@@ -339,20 +315,8 @@ or
 .Sy "right" Ns ,
 text is aligned to the left, center, or right of the menu, respectively.
 By default, text is aligned to the left.
-.It Ic "ctrlmenu.maxItems"
-The maximum number of items to be displayed in a menu.
-If a menu has more items than that value,
-the menu will feature arrow buttons for scrolling.
-.It Ic "ctrlmenu.altKeysym"
-The key symbol to highlight the alt characters on the menu entries.
-.It Ic "ctrlmenu.runnerKeychord"
-The keybinding to open the runner program.
-Equivalent to the
-.Fl R
-command-line option.
 .El
 .Sh ENVIRONMENT
-
 The following environment variables affect the execution of
 .Nm Ns .
 .Bl -tag -width Ds
@@ -362,10 +326,6 @@ The display to start
 on.
 .It ICONPATH
 A colon-separated list of paths to look for icons.
-.It RUNNER
-The invocation of the runner program.
-The value of this environment variable defaults to
-.Dq Ic "dmenu -i" .
 .El
 .Sh EXAMPLE
 Consider the following script:
@@ -374,8 +334,8 @@ Consider the following script:
 
 ctrlmenu -e -x "W-3" <<EOF
 _Applications {
-	_Web Browser [#./icons/web.png]  -- firefox
-	_Image Editor [#./icons/web.png] -- gimp
+	_Web Browser [#./icons/web.xpm]  -- firefox
+	_Image Editor [#./icons/web.xpm] -- gimp
 }
 _Terminals {
 	Terminal (_xterm) [!A-T] -- xterm

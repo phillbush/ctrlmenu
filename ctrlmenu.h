@@ -8,6 +8,7 @@
 #include <X11/Xft/Xft.h>
 #include <X11/cursorfont.h>
 #include <X11/extensions/Xinerama.h>
+#include <X11/extensions/sync.h>
 
 #define CLASS "CtrlMenu"
 #define NAME  "ctrlmenu"
@@ -24,9 +25,10 @@ struct Control;
 struct Prompt;
 
 enum {
-	ITEM_ISGEN      = 0x1,
-	ITEM_ICON       = 0x2,
-	ITEM_SELICON    = 0x4,
+	ITEM_ISGEN       = 0x1,
+	ITEM_ICON        = 0x2,
+	ITEM_FOUNDCALLER = 0x4,
+	ITEM_OPENER      = 0x8,
 };
 
 enum {
@@ -140,7 +142,8 @@ struct Item {
 	char *file;                     /* path to icon file */
 	char *genscript;                /* commands piped to sh to generate entries */
 	unsigned int altpos, altlen;    /* alternative key sequence */
-	Window icon[2];
+	Pixmap icon;
+	Pixmap mask;
 	KeySym altkey;
 	size_t len;
 	int flags;
@@ -231,9 +234,13 @@ extern Display *dpy;
 extern XIM xim;
 extern Atom atoms[];
 extern Window root;
+extern int sync_event;
+extern XSyncCounter servertime;
+extern char *opener, *calculator;
 
 /* parse.c */
-void readpipe(struct ItemQueue *itemq, struct Item *caller);
+void genmenu(struct ItemQueue *itemq, struct Item *caller);
+void runcalc(struct ItemQueue *itemq, char *text);
 void readfile(FILE *fp, char *filename, struct ItemQueue *itemq, struct AcceleratorQueue *accq);
 void cleanitems(struct ItemQueue *itemq);
 void cleanaccelerators(struct AcceleratorQueue *accq);
@@ -248,6 +255,7 @@ char *estrdup(const char *s);
 char *estrndup(const char *s, size_t maxlen);
 void epipe(int fd[]);
 void eexecshell(const char *cmd, const char *arg);
+void eexeccmd(const char *cmd, const char *arg);
 void edup2(int fd1, int fd2);
 pid_t efork(void);
 void xinit(int argc, char *argv[]);
@@ -275,10 +283,11 @@ void querypointer(int *x, int *y);
 XRectangle getselmon(XRectangle *rect);
 Window createwindow(XRectangle *rect, int type, const char *title);
 Pixmap createpixmap(XRectangle rect, Window win);
-Pixmap geticon(Window win, char *file, int issel, int color);
 KeyCode getkeycode(const char *str);
 int isresourcetrue(const char *val);
 char *getresource(const char *res, const char *name, const char *class);
+void geticon(Window win, char *file, Pixmap *icon, Pixmap *mask);
+void drawicon(Pixmap pix, Pixmap icon, Pixmap mask, int x, int y);
 
 /* prompt.c */
 int getoperation(struct Prompt *prompt, XKeyEvent *ev, char *buf, size_t bufsize, KeySym *ksym, int *len);

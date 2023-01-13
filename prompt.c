@@ -1,6 +1,7 @@
 #include <ctype.h>
 #include <err.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "ctrlmenu.h"
@@ -50,10 +51,12 @@ struct Prompt {
 	struct ItemQueue matchq;        /* list of matching items */
 	struct ItemQueue deferq;        /* list of matching items */
 	struct ItemQueue genq;          /* list of matching items */
+	struct ItemQueue results;       /* results of calculator */
 	struct Item *firstmatch;        /* first item that matches input */
 	struct Item *listfirst;         /* first item that matches input to be listed */
 	struct Item *selitem;           /* selected item */
 	struct Item **itemarray;        /* array containing nitems matching text */
+	struct Item open;               /* last item listed */
 	int nitems;                     /* number of items in itemarray */
 	int maxitems;                   /* maximum number of items in itemarray */
 
@@ -71,12 +74,6 @@ struct Prompt {
 	int caret;
 	int composing;                  /* whether user is composing text */
 };
-
-void
-redrawprompt(struct Prompt *prompt)
-{
-	commitdrawing(prompt->win, prompt->pix, prompt->rect);
-}
 
 /* draw the text on input field, return position of the cursor */
 static void
@@ -179,7 +176,7 @@ drawitems(struct Prompt *prompt)
 		rect.y = (i + 1) * config.itemheight + SEPARATOR_HEIGHT;
 		drawrectangle(prompt->pix, rect, pixel);
 		ytext = rect.y + (config.itemheight + dc.face->ascent) / 2;
-		if (prev == NULL || (item->caller != NULL && item->caller != prev->caller)) {
+		if (item->caller != NULL && (prev == NULL || item->caller != prev->caller)) {
 			drawtext(
 				prompt->pix,
 				altcolor,
@@ -525,21 +522,58 @@ itemmatch(struct Item *item, const char *text, size_t textlen, int middle)
 	    != (middle && (*config.fstrstr)(item->name, text) != NULL);
 }
 
+/* search for matching groups and fill matchq */
+static void
+searchgroups(struct Prompt *prompt, struct ItemQueue *itemq, int match, const char *text, size_t len, int middle)
+{
+	struct Item *item = NULL;
+	struct Item *prev;
+
+	prev = NULL;
+	TAILQ_FOREACH(item, itemq, entries) {
+		item->flags &= ~ITEM_FOUNDCALLER;
+		if (item->name == NULL) {
+			continue;
+		} else if (!TAILQ_EMPTY(&item->children)) {
+			searchgroups(prompt, &item->children, itemmatch(item, text, len, middle), text, len, middle);
+		} else if (item->genchildren != NULL && !TAILQ_EMPTY(item->genchildren)) {
+			searchgroups(prompt, item->genchildren, itemmatch(item, text, len, middle), text, len, middle);
+		} else if (match && item->genscript == NULL) {
+			if (prev == NULL)
+				TAILQ_INSERT_TAIL(&prompt->matchq, item, matches);
+			else
+				TAILQ_INSERT_AFTER(&prompt->matchq, prev, item, matches);
+			item->flags |= ITEM_FOUNDCALLER;
+			prev = item;
+		}
+	}
+}
+
 /* search for matching items and fill matchq */
 static void
 searchitems(struct Prompt *prompt, struct ItemQueue *itemq, const char *text, size_t len, int middle)
 {
 	struct Item *item = NULL;
+	struct Item *prev;
 
+	prev = NULL;
 	TAILQ_FOREACH(item, itemq, entries) {
 		if (item->name == NULL) {
 			continue;
 		} else if (!TAILQ_EMPTY(&item->children)) {
+			if (item->flags & ITEM_FOUNDCALLER)
+				continue;
 			searchitems(prompt, &item->children, text, len, middle);
-		} else if (item->genscript != NULL && !middle) {
-			//
-		} else if (itemmatch(item, text, len, middle)) {
-			TAILQ_INSERT_TAIL(&prompt->matchq, item, matches);
+		} else if (item->genchildren != NULL && !TAILQ_EMPTY(item->genchildren)) {
+			if (item->flags & ITEM_FOUNDCALLER)
+				continue;
+			searchitems(prompt, item->genchildren, text, len, middle);
+		} else if (item->genscript == NULL && itemmatch(item, text, len, middle)) {
+			if (prev == NULL)
+				TAILQ_INSERT_TAIL(&prompt->matchq, item, matches);
+			else
+				TAILQ_INSERT_AFTER(&prompt->matchq, prev, item, matches);
+			prev = item;
 		}
 	}
 }
@@ -611,17 +645,20 @@ getmatchlist(struct Prompt *prompt)
 {
 	struct Item *item;
 	size_t len;
-	const char *text;
+	char *text;
 
-	len = strlen(prompt->text);
-	text = prompt->text;
+	if (!TAILQ_EMPTY(&prompt->results))
+		return;
 	TAILQ_INIT(&prompt->matchq);
+	text = prompt->text;
+	len = strlen(prompt->text);
+	prompt->open.name = text;
+	prompt->open.len = len;
+	searchgroups(prompt, prompt->itemq, 0, text, len, 0);
+	searchgroups(prompt, prompt->itemq, 0, text, len, 1);
 	searchitems(prompt, prompt->itemq, text, len, 0);
-	TAILQ_FOREACH(item, &prompt->deferq, defers)
-		searchitems(prompt, item->genchildren, text, len, 0);
 	searchitems(prompt, prompt->itemq, text, len, 1);
-	TAILQ_FOREACH(item, &prompt->deferq, defers)
-		searchitems(prompt, item->genchildren, text, len, 1);
+	TAILQ_INSERT_TAIL(&prompt->matchq, &prompt->open, matches);
 	item = TAILQ_FIRST(&prompt->matchq);
 	prompt->firstmatch = item;
 	prompt->listfirst = item;
@@ -656,6 +693,7 @@ cleanundo(struct Prompt *prompt)
 void *
 setprompt(struct ItemQueue *itemq, Window *win, int *inited)
 {
+	static struct Item caller;
 	XICCallback start, done, draw, caret, destroy;
 	XVaNestedList preedit = NULL;
 	XIMStyles *imstyles;
@@ -681,6 +719,21 @@ setprompt(struct ItemQueue *itemq, Window *win, int *inited)
 		.maxitems = config.runner_items,
 		.nitems = 0,
 	};
+	caller = (struct Item){ .name = "?" };
+	prompt->open = (struct Item){
+		.genchildren = NULL,
+		.caller = &caller,
+		.desc = NULL,
+		.cmd = NULL,
+		.acc = NULL,
+		.file = NULL,
+		.genscript = NULL,
+		.icon = None,
+		.mask = None,
+		.flags = ITEM_OPENER,
+	};
+	TAILQ_INIT(&prompt->open.children);
+	TAILQ_INIT(&prompt->results);
 	prompt->itemarray = ecalloc(prompt->maxitems, sizeof(*prompt->itemarray)),
 	prompt->rect.x = prompt->rect.y = 0;
 	prompt->rect.width = DEFWIDTH;
@@ -773,7 +826,7 @@ mapprompt(struct Prompt *prompt)
 	getgenerators(prompt, prompt->itemq);
 	TAILQ_FOREACH(item, &prompt->deferq, defers) {
 		item->genchildren = emalloc(sizeof(*item->genchildren));
-		readpipe(item->genchildren, item);
+		genmenu(item->genchildren, item);
 	}
 	getmatchlist(prompt);
 	drawprompt(prompt);
@@ -793,6 +846,8 @@ unmapprompt(struct Prompt *prompt)
 	cleanundo(prompt);
 	free(prompt->ictext);
 	prompt->ictext = NULL;
+	if (!TAILQ_EMPTY(&prompt->results))
+		cleanitems(&prompt->results);
 	TAILQ_FOREACH(item, &prompt->deferq, defers) {
 		cleanitems(item->genchildren);
 		free(item->genchildren);
@@ -899,6 +954,8 @@ void
 promptkey(struct Prompt *prompt, char *buf, int len, int operation)
 {
 
+	struct Item *item;
+
 	if (operation == CTRLNOTHING)
 		return;
 	if (ISUNDO(operation) && ISEDITING(prompt->prevoperation))
@@ -917,7 +974,32 @@ promptkey(struct Prompt *prompt, char *buf, int len, int operation)
 		unmapprompt(prompt);
 		return;
 	case CTRLENTER:
-		enteritem(prompt->selitem);
+		if (prompt->selitem == NULL && *prompt->text == '=') {
+			TAILQ_INIT(&prompt->matchq);
+			if (!TAILQ_EMPTY(&prompt->results))
+				cleanitems(&prompt->results);
+			TAILQ_INIT(&prompt->results);
+			runcalc(&prompt->results, prompt->text + 1);
+			TAILQ_FOREACH(item, &prompt->results, entries) {
+				TAILQ_INSERT_TAIL(&prompt->matchq, item, matches);
+			}
+			item = TAILQ_FIRST(&prompt->matchq);
+			prompt->firstmatch = item;
+			prompt->listfirst = item;
+			prompt->selitem = NULL;
+			navmatchlist(prompt, 0);
+			break;
+		}
+		if (prompt->selitem == NULL) {
+			prompt->open.name = prompt->text;
+			prompt->open.cmd = prompt->text;
+			prompt->open.len = strlen(prompt->text);
+			enteritem(&prompt->open);
+		} else if (!TAILQ_EMPTY(&prompt->results)) {
+			// TODO
+		} else {
+			enteritem(prompt->selitem);
+		}
 		unmapprompt(prompt);
 		return;
 	case CTRLPREV:
@@ -1027,10 +1109,16 @@ promptkey(struct Prompt *prompt, char *buf, int len, int operation)
 		drawinput(prompt, 1);
 		return;
 	}
-	if (ISEDITING(operation) || ISUNDO(operation)) {
+	if ((ISEDITING(operation) || ISUNDO(operation)) && TAILQ_EMPTY(&prompt->results)) {
 		getmatchlist(prompt);
 		drawprompt(prompt);
 		return;
 	}
 	drawprompt(prompt);
+}
+
+void
+redrawprompt(struct Prompt *prompt)
+{
+	commitdrawing(prompt->win, prompt->pix, prompt->rect);
 }

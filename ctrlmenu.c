@@ -1,7 +1,6 @@
 #include <sys/wait.h>
 
 #include <err.h>
-#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,28 +9,32 @@
 
 #include "ctrlmenu.h"
 
-#define GETROOTMENU(c, w)  (((w) == (c)->docked.win) ? &(c)->docked : getmenu(&(c)->tornoffq, (w)))
-#define GETOPENMENU(c, w)  (((c)->curroot != NULL && (w) == (c)->curroot->win) ? (c)->curroot : getmenu(&(c)->popupq, (w)))
-#define GETFIRSTMENU(c)    (TAILQ_FIRST(&(c)->popupq) != NULL ? TAILQ_FIRST(&(c)->popupq) : (c)->curroot)
 #define TORNOFF_HEIGHT     (config.tornoff ? SEPARATOR_HEIGHT : 0)
+#define ALARMFLAGS         (XSyncCACounter | XSyncCAValue | XSyncCAValueType | XSyncCATestType | XSyncCADelta)
 #define MODS               (ShiftMask | ControlMask | Mod1Mask | Mod4Mask)
 #define SCROLL_TIME        100
 #define SCROLL_WAIT        200
 #define ICONPATH           "ICONPATH"   /* environment variable name */
 #define RUNNER             "RUNNER"
 
-enum {
-	STATE_NORMAL,
-	STATE_ALTPRESSED,
-	STATE_POPUP,
-};
+/* predicate on item (and another argument) */
+typedef int (*ItemPred)(struct Item *, void *);
 
 struct Control {
+	int running;                    /* are we running? */
+
 	/*
-	 * This structure is used mostly when getting an Expose event at
-	 * an event loop.  The draw() routine at menu.c traverses the
-	 * menus to get the one being exposed and redraws its window.
+	 * We use the XSync extension for scrolling.
 	 */
+	Window scrollwin;               /* the window being scrolled */
+	XSyncAlarm alarm;
+	XSyncAlarmAttributes attr;
+
+	/*
+	 * The list of items specified in the config file is listed on
+	 * this structure.
+	 */
+	struct ItemQueue *itemq;
 
 	/*
 	 * The docked menu is a dockapp menu that lives in the dock.
@@ -51,6 +54,16 @@ struct Control {
 	 */
 	struct Menu *curroot;
 
+	/*
+	 * The following states describe which kind of menus we have
+	 * open right now.
+	 */
+	enum {
+		STATE_NORMAL,           /* no popped up menu, alt key not pressed */
+		STATE_ALTPRESSED,       /* no popped up menu, alt key pressed */
+		STATE_POPUP,            /* popped up menu, alt key ignored */
+	} menustate;
+
 	struct AcceleratorQueue accq;
 
 	KeyCode altkey;
@@ -63,6 +76,7 @@ struct Control {
 
 	struct Prompt *prompt;
 	Window promptwin;
+	int promptopen;
 
 	int passclick;
 };
@@ -75,7 +89,7 @@ static struct Item scrolldown = { .name = "scrolldown" };
 static void
 usage(void)
 {
-	(void)fprintf(stderr, "usage: ctrlmenu [-cdit] [-a keysym] [-r keychord] [file]\n");
+	(void)fprintf(stderr, "usage: ctrlmenu [-dit] [-a keysym] [-r keychord] [-x buttonspec] [file]\n");
 	exit(1);
 }
 
@@ -88,7 +102,7 @@ drawmenu(struct Menu *menu, struct Item *oldsel, int menutype, int alt, int draw
 	size_t acclen;
 	int beg, textx, texty, separatorx, separatorwid, right, icony, x;
 	int altx, altw;
-	int issel, flag;
+	int issel;
 
 	/* draw menu */
 	icony = max(0, (config.itemheight - config.iconsize) / 2);
@@ -117,7 +131,6 @@ drawmenu(struct Menu *menu, struct Item *oldsel, int menutype, int alt, int draw
 		if (!drawall && item != oldsel && item != menu->selected)
 			goto donewithitem;
 		issel = item == menu->selected;
-		flag = (issel ? ITEM_SELICON : ITEM_ICON);
 		coloracc = (issel ? &dc.colors[COLOR_MENU].altselforeground : &dc.colors[COLOR_MENU].altforeground);
 		colorfg = (issel ? &dc.colors[COLOR_MENU].selforeground : &dc.colors[COLOR_MENU].foreground);
 		colorbg = (issel ? &dc.colors[COLOR_MENU].selbackground : &dc.colors[COLOR_MENU].background);
@@ -131,21 +144,12 @@ drawmenu(struct Menu *menu, struct Item *oldsel, int menutype, int alt, int draw
 
 			/* draw item icon */
 			if (item->file != NULL) {
-				if (!(item->flags & flag)) {
-					item->icon[issel] = geticon(menu->win, item->file, issel, COLOR_MENU);
-					item->flags |= flag;
+				if (!(item->flags & ITEM_ICON)) {
+					geticon(menu->win, item->file, &item->icon, &item->mask);
+					item->flags |= ITEM_ICON;
 				}
-				if (item->icon[issel] != None) {
-					copypixmap(
-						menu->pix,
-						item->icon[issel],
-						(XRectangle){
-							.x = PADDING ,
-							.y = rect.y + icony,
-							.width = config.iconsize,
-							.height = config.iconsize,
-						}
-					);
+				if (item->icon != None) {
+					drawicon(menu->pix, item->icon, item->mask, PADDING, rect.y + icony);
 				}
 			}
 
@@ -409,7 +413,7 @@ insertpopupmenu(struct MenuQueue *menuq, Window parentwin, XRectangle parentrect
 {
 	if (caller != NULL && caller->genscript != NULL) {
 		itemq = emalloc(sizeof(*itemq));
-		readpipe(itemq, caller);
+		genmenu(itemq, caller);
 	}
 	insertmenu(menuq, parentwin, parentrect, itemq, caller, MENU_POPUP, y);
 }
@@ -433,6 +437,30 @@ getmenu(struct MenuQueue *menuq, Window win)
 		if (menu->win == win)
 			return menu;
 	return NULL;
+}
+
+static struct Menu *
+getopenmenu(struct Control *ctrl, Window win)
+{
+	if (ctrl->menustate == STATE_POPUP) {
+		return (ctrl->curroot != NULL && win == ctrl->curroot->win)
+		? ctrl->curroot
+		: getmenu(&ctrl->popupq, win);
+	} else {
+		return (win == ctrl->docked.win)
+		? &ctrl->docked
+		: getmenu(&ctrl->tornoffq, win);
+	}
+}
+
+static struct Menu *
+gettopmenu(struct Control *ctrl)
+{
+	struct Menu *menu;
+
+	if ((menu = TAILQ_FIRST(&ctrl->popupq)) == NULL)
+		menu = ctrl->curroot;
+	return menu;
 }
 
 static struct Item *
@@ -505,10 +533,9 @@ menugenerated(struct Control *ctrl, struct Item *item)
 }
 
 static int
-invalidbutton(XEvent *ev)
+invalidbutton(unsigned int button)
 {
-	return ((ev->type == ButtonPress || ev->type == ButtonRelease) &&
-                (ev->xbutton.button != Button1 && ev->xbutton.button != Button3));
+	return (button != Button1 && button != Button3);
 }
 
 static struct Item *
@@ -530,7 +557,7 @@ scroll(struct Control *ctrl, Window win)
 	int menutype;
 	int h, end;
 
-	if ((menu = GETOPENMENU(ctrl, win)) == NULL && (menu = GETROOTMENU(ctrl, win)) == NULL)
+	if ((menu = getopenmenu(ctrl, win)) == NULL)
 		return 0;
 	end = h = SEPARATOR_HEIGHT;
 	if ((menutype = getmenutype(ctrl, menu)) == MENU_POPUP) {
@@ -649,6 +676,9 @@ removepopped(struct Control *ctrl)
 		drawmenu(ctrl->curroot, NULL, getmenutype(ctrl, ctrl->curroot), 0, 1);
 		ctrl->curroot = NULL;
 	}
+	ctrl->menustate = STATE_NORMAL;
+	if (config.mode == 0)
+		ctrl->running = 0;
 	return;
 }
 
@@ -659,6 +689,7 @@ initpopped(struct Control *ctrl, struct Menu *rootmenu, Window parentwin, XRecta
 		removepopped(ctrl);
 	insertpopupmenu(&ctrl->popupq, parentwin, parentrect, caller, itemq, y);
 	ctrl->curroot = rootmenu;
+	ctrl->menustate = STATE_POPUP;
 	return;
 }
 
@@ -667,8 +698,7 @@ draw(struct Control *ctrl, Window win)
 {
 	struct Menu *menu;
 
-	if ((menu = GETROOTMENU(ctrl, win)) != NULL ||
-	    (menu = getmenu(&ctrl->popupq, win)) != NULL) {
+	if ((menu = getopenmenu(ctrl, win)) != NULL) {
 		commitdrawing(win, menu->pix, menu->rect);
 	} else if (win == ctrl->promptwin) {
 		redrawprompt(ctrl->prompt);
@@ -765,368 +795,423 @@ done:
 	return oldfirst != menu->first;
 }
 
-#define LOOPYTOP(menu, type, item, ytop, cond, retfound, retdef)                                 \
-	do {                                                                                     \
-		if ((type) == MENU_POPUP)                                                        \
-			(ytop) = config.shadowThickness + TORNOFF_HEIGHT;                        \
-		else                                                                             \
-			(ytop) = 0;                                                              \
-		if ((menu)->overflow)                                                            \
-			(ytop) += SEPARATOR_HEIGHT;                                              \
-		TAILQ_FOREACH((item), (menu)->queue, entries) {                                  \
-			if ((cond))                                                              \
-				return (retfound);                                               \
-			(ytop) += ((item)->name != NULL) ? config.itemheight : SEPARATOR_HEIGHT; \
-		}                                                                                \
-		return (retdef);                                                                 \
-	} while(0);
-
-static struct Item *
-getaltitem(struct Menu *menu, KeyCode key, int type, int *ytop)
+static int
+checkaltkey(struct Item *item, void *p)
 {
-	struct Item *item;
+	KeyCode key;
 
-	if (key == 0 || menu == NULL)
-		return NULL;
-	LOOPYTOP(menu, type, item, *ytop, (key == item->altkey), item, NULL);
-	return NULL;
+	key = *(KeyCode *)p;
+	return (key != 0 && key == item->altkey);
 }
 
 static int
-getypos(struct Menu *menu, int type)
+checkselected(struct Item *item, void *p)
 {
-	struct Item *item;
-	int ytop;
+	struct Menu *menu;
 
-	if (menu == NULL)
-		return 0;
-	LOOPYTOP(menu, type, item, ytop, (item == menu->selected), ytop, 0);
-	return 0;
+	menu = (struct Menu *)p;
+	return (item == menu->selected);
 }
 
-#define REMOVEPOPPED(ctrl)                \
-	do {                              \
-		removepopped(ctrl);       \
-		menustate = STATE_NORMAL; \
-		if (config.mode == 0) {   \
-			goto done;        \
-		}                         \
-	} while (0)
+static struct Item *
+getitempred(struct Menu *menu, int type, ItemPred pred, void *p, int *ytop)
+{
+	struct Item *item;
 
-#define OPENITEM(ctrl, menu, item, type, gen, motion, y)                                             \
-	do {                                                                                           \
-		if (!(gen) && ((item)->genscript != NULL || !TAILQ_EMPTY(&(item)->children))) {        \
-			ignorerelease = 0;                                                             \
-			if (menustate != STATE_POPUP && (motion))                                      \
-				break;                                                                 \
-			if (menustate != STATE_POPUP) {                                                \
-				initpopped(                                                            \
-					(ctrl),                                                        \
-					(menu),                                                        \
-					(menu)->win,                                                   \
-					(menu)->rect,                                                  \
-					(item),                                                        \
-					&(item)->children,                                             \
-					(y)                                                            \
-				);                                                                     \
-				menustate = STATE_POPUP;                                               \
-			} else {                                                                       \
-				insertpopupmenu(                                                       \
-					&(ctrl)->popupq,                                               \
-					(menu)->win,                                                   \
-					(menu)->rect,                                                  \
-					(item),                                                        \
-					&(item)->children,                                             \
-					(y)                                                            \
-				);                                                                     \
-			}                                                                              \
-		} else if (!(motion) && (item)->genscript == NULL && TAILQ_EMPTY(&(item)->children)) { \
-			enteritem((item));                                                             \
-			if (menustate == STATE_POPUP) {                                                \
-				REMOVEPOPPED((ctrl));                                                  \
-			}                                                                              \
-		}                                                                                      \
-	} while (0)
+	/* get item (and its y position) for which the given predicate is valid */
+	if (menu == NULL)
+		return NULL;
+	if (type == MENU_POPUP)
+		*ytop = config.shadowThickness + TORNOFF_HEIGHT;
+	else
+		*ytop = 0;
+	if (menu->overflow)
+		*ytop += SEPARATOR_HEIGHT;
+	TAILQ_FOREACH(item, menu->queue, entries) {
+		if ((*pred)(item, p))
+			return item;
+		*ytop += (item->name != NULL) ? config.itemheight : SEPARATOR_HEIGHT;
+	}
+	return NULL;
+}
 
 static void
-run(struct Control *ctrl, struct ItemQueue *itemq)
+openitem(struct Control *ctrl, struct Menu *menu, struct Item *item, int delete, int ismotion, int y)
 {
-	struct Menu *menu, *rootmenu;
+	struct Menu *firstpop;
+	int gen, type;
+
+	type = getmenutype(ctrl, menu);
+	gen = menugenerated(ctrl, item);  /* whether a menu was generated for this item */
+	if (delete) {
+		firstpop = TAILQ_FIRST(&ctrl->popupq);
+		if (ctrl->menustate == STATE_POPUP && !gen &&
+		    menu != firstpop && firstpop != NULL &&
+		    (TAILQ_FIRST(&item->children) != TAILQ_FIRST(firstpop->queue))) {
+			if (menu == ctrl->curroot) {
+				delmenus(&ctrl->popupq, TAILQ_LAST(&ctrl->popupq, MenuQueue));
+			} else if (type == MENU_POPUP) {
+				delmenus(&ctrl->popupq, TAILQ_PREV(menu, MenuQueue, entries));
+			}
+		}
+	}
+	if (!gen && (item->genscript != NULL || !TAILQ_EMPTY(&item->children))) {
+		if (ctrl->menustate != STATE_POPUP) {
+			if (ismotion)
+				return;
+			initpopped(ctrl, menu, menu->win, menu->rect, item, &item->children, y);
+		} else {
+			insertpopupmenu(&ctrl->popupq, menu->win, menu->rect, item, &item->children, y);
+		}
+	} else if (!ismotion && item->genscript == NULL && TAILQ_EMPTY(&item->children)) {
+		enteritem(item);
+		if (ctrl->menustate == STATE_POPUP) {
+			removepopped(ctrl);
+		}
+	}
+}
+
+static void
+xevexpose(XEvent *e, struct Control *ctrl)
+{
+	XExposeEvent *xev;
+
+	xev = &e->xexpose;
+	if (xev->count == 0) {
+		draw(ctrl, xev->window);
+	}
+}
+
+static void
+xevleave(XEvent *e, struct Control *ctrl)
+{
+	XLeaveWindowEvent *xev;
+	struct Menu *menu;
+	struct Item *oldsel;
+	int type;
+
+	xev = &e->xcrossing;
+	if ((menu = getopenmenu(ctrl, xev->window)) == NULL)
+		return;
+	type = getmenutype(ctrl, menu);
+	if ((oldsel = menu->selected) != NULL) {
+		menu->selected = NULL;
+		drawmenu(menu, oldsel, type, 0, 0);
+	}
+}
+
+static void
+xevbpress(XEvent *e, struct Control *ctrl)
+{
+	XButtonEvent *xev;
+	XRectangle rect;
+
+	xev = &e->xbutton;
+
+	if (xev->window != root || invalidbutton(xev->button))
+		return;
+	if (ctrl->menustate == STATE_NORMAL &&
+	    (config.mode & MODE_CONTEXT) &&
+	    xev->button == ctrl->button &&
+	    (ctrl->buttonmod == AnyModifier ||
+	     (ctrl->buttonmod != 0 && ctrl->buttonmod == (xev->state & MODS)) ||
+	     (xev->subwindow == None))) {
+		/* user clicked on root window; popup root menu */
+		rect = (XRectangle){
+			.x = xev->x_root,
+			.y = xev->y_root,
+			.width = 0,
+			.height = 0,
+		};
+		initpopped(ctrl, NULL, root, rect, NULL, ctrl->itemq, 0);
+		// while (!XCheckTypedEvent(dpy, ButtonRelease, e)) {
+		// 	; /* remove the next ButtonRelease event */
+		// }
+	} else if (ctrl->menustate == STATE_POPUP) {
+		/* user clicked out of a popped up menu; remove popped up menus */
+		removepopped(ctrl);
+	}
+}
+
+static void
+xevmotion(XEvent *e, struct Control *ctrl)
+{
+	struct Menu *menu;
 	struct Item *item, *oldsel;
-	struct pollfd pfd;
-	Window win, scrollwin;
-	XEvent ev;
+	XMotionEvent *xev;
+	int type, y;
+
+	xev = &e->xmotion;
+
+	menu = getopenmenu(ctrl, xev->window);
+	if (menu == NULL)
+		return;
+	type = getmenutype(ctrl, menu);
+	item = getitem(menu, type, xev->y, &y);
+	if (item != menu->selected) {
+		oldsel = menu->selected;
+		menu->selected = item;
+		drawmenu(menu, oldsel, type, 0, 0);
+	}
+	if (item == &scrollup || item == &scrolldown) {
+		/* motion over scroll buttons */
+		ctrl->scrollwin = xev->window;
+		if (ctrl->alarm == None)
+			ctrl->alarm = XSyncCreateAlarm(dpy, ALARMFLAGS, &ctrl->attr);
+		return;
+	}
+	if (ctrl->alarm != None) {
+		XSyncDestroyAlarm(dpy, ctrl->alarm);
+		ctrl->alarm = None;
+	}
+	if (item == NULL)
+		return;
+	openitem(ctrl, menu, item, True, True, y);
+}
+
+static void
+xevbrelease(XEvent *e, struct Control *ctrl)
+{
+	struct Menu *menu;
+	struct Item *item, *oldsel;
+	XButtonEvent *xev;
+	int type, y;
+
+	xev = &e->xbutton;
+	if (invalidbutton(xev->button))
+		return;
+	menu = getopenmenu(ctrl, xev->window);
+	if (menu == NULL)
+		return;
+	type = getmenutype(ctrl, menu);
+	item = getitem(menu, type, xev->y, &y);
+	if (item != menu->selected) {
+		oldsel = menu->selected;
+		menu->selected = item;
+		drawmenu(menu, oldsel, type, 0, 0);
+	}
+	if (item == NULL)
+		return;
+	if (item == &scrollup || item == &scrolldown)
+		return;
+	if (item == &tornoff && ctrl->menustate == STATE_POPUP) {
+		TAILQ_REMOVE(&ctrl->popupq, menu, entries);
+		insertmenu(&ctrl->tornoffq, menu->win, menu->rect, menu->queue, menu->caller, MENU_TORNOFF, 0);
+		delmenu(menu, 0);
+		removepopped(ctrl);
+		return;
+	}
+	openitem(ctrl, menu, item, True, False, y);
+}
+
+static void
+xevkrelease(XEvent *e, struct Control *ctrl)
+{
+	XKeyEvent *xev;
+
+	xev = &e->xkey;
+	if (xev->keycode == ctrl->altkey) {
+		if (ctrl->menustate != STATE_ALTPRESSED)
+			return;
+		drawmenu(&ctrl->docked, NULL, MENU_DOCKAPP, 0, 1);
+		ungrab();
+	}
+}
+
+static void
+xevkpress(XEvent *e, struct Control *ctrl)
+{
+	struct Menu *menu;
+	struct Item *item, *oldsel;
+	XKeyEvent *xev;
 	KeySym ksym;
-	int menustate;          /* STATE_NORMAL, STATE_ALTPRESSED or STATE_POPUP */
-	int promptopen;         /* whether prompt window is open */
-	int gen, type, pos, x, y, scrolled;
-	int ret, timeout, len, operation;
-	int ignorerelease;      /* whether to ignore button release after pressing on root */
+	int scrolled, type, len, operation, y;
 	char buf[INPUTSIZ];
 
+	xev = &e->xkey;
+	ksym = XkbKeycodeToKeysym(dpy, xev->keycode, 0, 0);
+	if (ksym == XK_Tab && (xev->state & ShiftMask))        /* Shift-Tab = ISO_Left_Tab */
+		ksym = XK_ISO_Left_Tab;
+	if (ksym == XK_Escape && ctrl->menustate == STATE_POPUP) {
+		/* esc closes popped up menu when current menu is the root menu */
+		removepopped(ctrl);
+		return;
+	} else if (ctrl->promptopen && xev->window == ctrl->promptwin) {
+		/* pass key to prompt */
+		operation = getoperation(ctrl->prompt, xev, buf, INPUTSIZ, &ksym, &len);
+		promptkey(ctrl->prompt, buf, len, operation);
+		return;
+	} else if (ctrl->menustate != STATE_POPUP && (config.mode & MODE_RUNNER) &&
+		   xev->keycode == ctrl->runnerkey &&
+		   (xev->state & MODS) == ctrl->runnermod) {
+		/* open prompt */
+		mapprompt(ctrl->prompt);
+		redrawprompt(ctrl->prompt);
+		XFlush(dpy);
+		return;
+	} else if ((item = matchacc(&ctrl->accq, xev->keycode, xev->state)) != NULL) {
+		/* enter item via accelerator keychord */
+		enteritem(item);
+		if (ctrl->menustate == STATE_POPUP) {
+			removepopped(ctrl);
+		}
+		return;
+	} else if ((config.mode & MODE_DOCKAPP) && xev->keycode == ctrl->altkey) {
+		/* underline altchar on docked menu */
+		if (ctrl->menustate == STATE_POPUP)
+			return;
+		ctrl->menustate = STATE_ALTPRESSED;
+		grab(GRAB_KEYBOARD);
+		drawmenu(&ctrl->docked, NULL, MENU_DOCKAPP, 1, 1);
+		return;
+	}
+	menu = gettopmenu(ctrl);
+	if (menu != NULL)
+		type = getmenutype(ctrl, menu);
+	if (menu != NULL && ctrl->menustate == STATE_POPUP && (ksym == XK_Tab || ksym == XK_Down)) {
+		oldsel = menu->selected;
+		scrolled = itemcycle(menu, type, 1);
+		drawmenu(menu, oldsel, type, menu == &ctrl->docked && ctrl->menustate == STATE_ALTPRESSED, scrolled);
+	} else if (menu != NULL && ctrl->menustate == STATE_POPUP && (ksym == XK_ISO_Left_Tab || ksym == XK_Up)) {
+		oldsel = menu->selected;
+		scrolled = itemcycle(menu, type, 0);
+		drawmenu(menu, oldsel, type, menu == &ctrl->docked && ctrl->menustate == STATE_ALTPRESSED, scrolled);
+	} else if (menu != NULL && ctrl->menustate == STATE_POPUP && (ksym == XK_Return || ksym == XK_Right) && menu->selected != NULL) {
+		item = menu->selected;
+		(void)getitempred(menu, type, checkselected, menu, &y);
+		openitem(ctrl, menu, item, False, False, y);
+		return;
+	} else if (menu != NULL && ctrl->menustate == STATE_POPUP && ksym == XK_Left && menu != TAILQ_LAST(&ctrl->popupq, MenuQueue)) {
+		delmenus(&ctrl->popupq, menu);
+		return;
+	} else if (xev->window == root && (ctrl->menustate == STATE_ALTPRESSED || ctrl->menustate == STATE_POPUP)) {
+		/* enter item via alt key */
+		if ((menu = TAILQ_FIRST(&ctrl->popupq)) == NULL)
+			menu = &ctrl->docked;
+		type = getmenutype(ctrl, menu);
+		if ((item = getitempred(menu, type, checkaltkey, &xev->keycode, &y)) == NULL)
+			return;
+		oldsel = menu->selected;
+		menu->selected = item;
+		if (ctrl->menustate == STATE_ALTPRESSED) {
+			ctrl->menustate = STATE_NORMAL;
+			ungrab();
+		}
+		drawmenu(menu, oldsel, type, 1, 0);
+		openitem(ctrl, menu, item, False, False, y);
+	} else if ((config.mode & MODE_RUNNER) && xev->window == root) {
+		operation = getoperation(ctrl->prompt, xev, buf, INPUTSIZ, &ksym, &len);
+		if (operation != INSERT)
+			return;
+		mapprompt(ctrl->prompt);
+		redrawprompt(ctrl->prompt);
+		promptkey(ctrl->prompt, buf, len, operation);
+		XFlush(dpy);
+	}
+}
+
+static void
+xevconfigure(XEvent *e, struct Control *ctrl)
+{
+	struct Menu *menu;
+	XConfigureEvent *xev;
+	int type;
+
+	xev = &e->xconfigure;
+	if ((menu = getopenmenu(ctrl, xev->window)) == NULL)
+		return;
+	type = getmenutype(ctrl, menu);
+	configuremenu(menu, xev->x, xev->y, xev->width, xev->height);
+	drawmenu(menu, NULL, type, menu == &ctrl->docked && ctrl->menustate == STATE_ALTPRESSED, 1);
+}
+
+static void
+xevclient(XEvent *e, struct Control *ctrl)
+{
+	struct Menu *menu;
+	XClientMessageEvent *xev;
+
+	xev = &e->xclient;
+	/* user may have closed tornoff window */
+	if ((Atom)xev->data.l[0] != atoms[WM_DELETE_WINDOW])
+		return;
+	if ((menu = getmenu(&ctrl->tornoffq, xev->window)) == NULL)
+		return;
+	if (ctrl->menustate == STATE_POPUP)
+		removepopped(ctrl);
+	TAILQ_REMOVE(&ctrl->tornoffq, menu, entries);
+	delmenu(menu, 1);
+}
+
+static void
+xevalarm(XEvent *e, struct Control *ctrl)
+{
+	if (e->type != sync_event + XSyncAlarmNotify || ctrl->alarm == None)
+		return;
+	if (!scroll(ctrl, ctrl->scrollwin))
+		ctrl->scrollwin = None;
+	XSyncChangeAlarm(dpy, ctrl->alarm, ALARMFLAGS, &ctrl->attr);
+}
+
+static void (*xevents[LASTEvent])(XEvent *, struct Control *) = {
+	[ButtonPress]           = xevbpress,
+	[ButtonRelease]         = xevbrelease,
+	[ConfigureNotify]       = xevconfigure,
+	[ClientMessage]         = xevclient,
+	[Expose]                = xevexpose,
+	[KeyPress]              = xevkpress,
+	[KeyRelease]            = xevkrelease,
+	[LeaveNotify]           = xevleave,
+	[MotionNotify]          = xevmotion,
+};
+
+static void
+run(struct Control *ctrl)
+{
+	XRectangle rect;
+	XEvent ev;
+	int x, y;
+
+	ctrl->attr = (XSyncAlarmAttributes){
+		.trigger.counter        = servertime,
+		.trigger.value_type     = XSyncRelative,
+		.trigger.test_type      = XSyncPositiveComparison,
+	};
+	XSyncIntToValue(&ctrl->attr.trigger.wait_value, 128);
+	XSyncIntToValue(&ctrl->attr.delta, 0);
 	TAILQ_INIT(&ctrl->tornoffq);
 	TAILQ_INIT(&ctrl->popupq);
 	ctrl->curroot = NULL;
 	ctrl->passclick = 0;
 	if (config.mode & MODE_RUNNER)
-		ctrl->prompt = setprompt(itemq, &ctrl->promptwin, &promptopen);
+		ctrl->prompt = setprompt(ctrl->itemq, &ctrl->promptwin, &ctrl->promptopen);
 	else
 		ctrl->prompt = NULL;
 	if (config.mode & MODE_DOCKAPP)
-		setdockedmenu(&ctrl->docked, itemq);
+		setdockedmenu(&ctrl->docked, ctrl->itemq);
 	initgrabs(ctrl);
-	pfd.fd = XConnectionNumber(dpy);
-	pfd.events = POLLIN;
-	pfd.revents = POLLIN;
-	timeout = -1;
-	ret = 1;
-	ignorerelease = 0;
-	scrollwin = None;
-	promptopen = 0;
+	ctrl->scrollwin = None;
+	ctrl->promptopen = 0;
+	ctrl->alarm = None;
 	if (config.mode == 0) {
-		menustate = STATE_POPUP;
 		querypointer(&x, &y);
-		initpopped(
-			ctrl,
-			NULL,
-			root,
-			(XRectangle){ .x = x, .y = y, .width = 0, .height = 0 },
-			NULL,
-			itemq,
-			0
-		);
+		rect = (XRectangle){ .x = x, .y = y, .width = 0, .height = 0 },
+		initpopped(ctrl, NULL, root, rect, NULL, ctrl->itemq, 0);
 	} else {
-		menustate = STATE_NORMAL;
+		ctrl->menustate = STATE_NORMAL;
 	}
-	do {
-		if (ret == 0) {
-			if (scroll(ctrl, scrollwin)) {
-				timeout = SCROLL_TIME;
-			} else {
-				timeout = -1;
-				scrollwin = None;
-			}
-			continue;
-		}
-		ret = 1;
-		if (!(pfd.revents & POLLIN))
-			continue;
-nextevent:
-		XNextEvent(dpy, &ev);
+	ctrl->running = 1;
+	while (ctrl->running && !XNextEvent(dpy, &ev)) {
 		if (XFilterEvent(&ev, None))
 			continue;
-		switch (ev.type) {
-		case Expose:
-			if (ev.xexpose.count == 0)
-				draw(ctrl, ev.xbutton.window);
-			break;
-		case LeaveNotify:
-			/* clear selection when leaving a root menu */
-			if (menustate == STATE_POPUP || (menu = GETROOTMENU(ctrl, ev.xbutton.window)) == NULL)
-				break;
-			type = getmenutype(ctrl, menu);
-			if ((oldsel = menu->selected) != NULL) {
-				menu->selected = NULL;
-				drawmenu(menu, oldsel, type, 0, 0);
-			}
-			break;
-		case ButtonPress:
-			if (ev.xbutton.window != root || invalidbutton(&ev))
-				break;
-			if (menustate == STATE_NORMAL && (config.mode & MODE_CONTEXT) &&
-			    ev.xbutton.button == ctrl->button &&
-			    (ctrl->buttonmod == AnyModifier ||
-			     (ctrl->buttonmod != 0 && (ev.xbutton.state & MODS) == ctrl->buttonmod) ||
-			     (ev.xbutton.subwindow == None))) {
-				initpopped(
-					ctrl,
-					NULL,
-					root,
-					(XRectangle){ .x = ev.xbutton.x_root, .y = ev.xbutton.y_root, .width = 0, .height = 0 },
-					NULL,
-					itemq,
-					0
-				);
-				menustate = STATE_POPUP;
-				ignorerelease = 1;
-			} else if (menustate == STATE_POPUP) {
-				REMOVEPOPPED(ctrl);
-			}
-			break;
-		case MotionNotify:
-		case ButtonRelease:
-			if (ev.type == ButtonRelease && ignorerelease) {
-				ignorerelease = 0;
-				break;
-			}
-			if (invalidbutton(&ev))
-				break;
-			win = (ev.type == MotionNotify) ? ev.xmotion.window : ev.xbutton.window;
-			pos = (ev.type == MotionNotify) ? ev.xmotion.y : ev.xbutton.y;
-			rootmenu = GETROOTMENU(ctrl, win);
-			menu = GETOPENMENU(ctrl, win);
-			if (rootmenu != NULL && menu == NULL) {
-				if (menustate == STATE_POPUP) {
-					REMOVEPOPPED(ctrl);
-				}
-				menu = rootmenu;
-			}
-			if (menu == NULL)
-				break;
-			item = getitem(menu, getmenutype(ctrl, menu), pos, &y);
-			type = getmenutype(ctrl, menu);
-			timeout = -1;
-			if (item != menu->selected) {
-				oldsel = menu->selected;
-				menu->selected = item;
-				drawmenu(menu, oldsel, type, 0, 0);
-			}
-			if (item == NULL)
-				break;
-			if (item == &scrollup || item == &scrolldown) {
-				scrollwin = win;
-				timeout = SCROLL_WAIT;
-				break;
-			}
-			if (item == &tornoff) {
-				if (menustate == STATE_POPUP && ev.type == ButtonRelease) {
-					TAILQ_REMOVE(&ctrl->popupq, menu, entries);
-					insertmenu(&ctrl->tornoffq, menu->win, menu->rect, menu->queue, menu->caller, MENU_TORNOFF, 0);
-					delmenu(menu, 0);
-					REMOVEPOPPED(ctrl);
-				}
-				break;
-			}
-			gen = menugenerated(ctrl, item);  /* whether a menu was generated for this item */
-			if (menustate == STATE_POPUP && !gen && menu != TAILQ_FIRST(&ctrl->popupq) && TAILQ_FIRST(&ctrl->popupq) != NULL &&
-			    (TAILQ_FIRST(&item->children) != TAILQ_FIRST(TAILQ_FIRST(&ctrl->popupq)->queue))) {
-				if (menu == ctrl->curroot) {
-					delmenus(&ctrl->popupq, TAILQ_LAST(&ctrl->popupq, MenuQueue));
-				} else if (type == MENU_POPUP) {
-					delmenus(&ctrl->popupq, TAILQ_PREV(menu, MenuQueue, entries));
-				}
-			}
-			OPENITEM(ctrl, menu, item, type, gen, ev.type == MotionNotify, y);
-			break;
-		case KeyRelease:
-			if (ev.xkey.keycode == ctrl->altkey) {
-				if (menustate != STATE_ALTPRESSED)
-					break;
-				drawmenu(&ctrl->docked, NULL, MENU_DOCKAPP, 0, 1);
-				ungrab();
-			}
-			break;
-		case KeyPress:
-			ksym = XkbKeycodeToKeysym(dpy, ev.xkey.keycode, 0, 0);
-			if (ksym == XK_Escape && menustate == STATE_POPUP) {
-				/* esc closes popped up menu when current menu is the root menu */
-				REMOVEPOPPED(ctrl);
-				break;
-			}
-			if (ksym == XK_Tab && (ev.xkey.state & ShiftMask)) {
-				/* Shift-Tab = ISO_Left_Tab */
-				ksym = XK_ISO_Left_Tab;
-			}
-			if (promptopen && ev.xkey.window == ctrl->promptwin) {
-				/* pass key to prompt */
-				operation = getoperation(ctrl->prompt, &ev.xkey, buf, INPUTSIZ, &ksym, &len);
-				promptkey(ctrl->prompt, buf, len, operation);
-			} else if (menustate != STATE_POPUP && (config.mode & MODE_RUNNER) &&
-			           ev.xkey.keycode == ctrl->runnerkey &&
-			           (ev.xkey.state & MODS) == ctrl->runnermod) {
-				/* open prompt */
-				mapprompt(ctrl->prompt);
-				redrawprompt(ctrl->prompt);
-				XFlush(dpy);
-			} else if ((item = matchacc(&ctrl->accq, ev.xkey.keycode, ev.xkey.state)) != NULL) {
-				/* enter item via accelerator keychord */
-				enteritem(item);
-				if (menustate == STATE_POPUP) {
-					REMOVEPOPPED(ctrl);
-				}
-			} else if ((config.mode & MODE_DOCKAPP) && ev.xkey.keycode == ctrl->altkey) {
-				/* underline altchar on docked menu */
-				if (menustate == STATE_POPUP)
-					break;
-				menustate = STATE_ALTPRESSED;
-				grab(GRAB_KEYBOARD);
-				drawmenu(&ctrl->docked, NULL, MENU_DOCKAPP, 1, 1);
-			} else {
-				menu = GETFIRSTMENU(ctrl);
-				if (menu != NULL)
-					type = getmenutype(ctrl, menu);
-				if (menu != NULL && menustate == STATE_POPUP && (ksym == XK_Tab || ksym == XK_Down)) {
-					oldsel = menu->selected;
-					scrolled = itemcycle(menu, type, 1);
-					drawmenu(menu, oldsel, type, menu == &ctrl->docked && menustate == STATE_ALTPRESSED, scrolled);
-				} else if (menu != NULL && menustate == STATE_POPUP && (ksym == XK_ISO_Left_Tab || ksym == XK_Up)) {
-					oldsel = menu->selected;
-					scrolled = itemcycle(menu, type, 0);
-					drawmenu(menu, oldsel, type, menu == &ctrl->docked && menustate == STATE_ALTPRESSED, scrolled);
-				} else if (menu != NULL && menustate == STATE_POPUP && (ksym == XK_Return || ksym == XK_Right) && menu->selected != NULL) {
-					item = menu->selected;
-					y = getypos(menu, type);
-					ev.type = ButtonRelease;
-					OPENITEM(ctrl, menu, item, type, 0, 0, y);
-					break;
-				} else if (menu != NULL && menustate == STATE_POPUP && ksym == XK_Left && menu != TAILQ_LAST(&ctrl->popupq, MenuQueue)) {
-					delmenus(&ctrl->popupq, menu);
-					break;
-				} else if (ev.xkey.window == root && (menustate == STATE_ALTPRESSED || menustate == STATE_POPUP)) {
-					/* enter item via alt key */
-					if ((menu = TAILQ_FIRST(&ctrl->popupq)) == NULL)
-						menu = &ctrl->docked;
-					type = getmenutype(ctrl, menu);
-					if ((item = getaltitem(menu, ev.xkey.keycode, type, &y)) == NULL)
-						break;
-					oldsel = menu->selected;
-					menu->selected = item;
-					if (menustate == STATE_ALTPRESSED) {
-						menustate = STATE_NORMAL;
-						ungrab();
-					}
-					drawmenu(menu, oldsel, type, 1, 0);
-					OPENITEM(ctrl, menu, item, type, 0, 0, y);
-				} else if ((config.mode & MODE_RUNNER) && ev.xkey.window == root) {
-					operation = getoperation(ctrl->prompt, &ev.xkey, buf, INPUTSIZ, &ksym, &len);
-					if (operation != INSERT)
-						break;
-					mapprompt(ctrl->prompt);
-					redrawprompt(ctrl->prompt);
-					promptkey(ctrl->prompt, buf, len, operation);
-					XFlush(dpy);
-				}
-			}
-			break;
-		case ConfigureNotify:
-			if ((menu = GETROOTMENU(ctrl, ev.xconfigure.window)) == NULL &&
-			    (menu = getmenu(&ctrl->popupq, ev.xconfigure.window)) == NULL)
-				break;
-			type = getmenutype(ctrl, menu);
-			configuremenu(menu, ev.xconfigure.x, ev.xconfigure.y, ev.xconfigure.width, ev.xconfigure.height);
-			drawmenu(menu, NULL, type, menu == &ctrl->docked && menustate == STATE_ALTPRESSED, 1);
-			break;
-		case ClientMessage:
-			/* user may have closed tornoff window */
-			if ((Atom)ev.xclient.data.l[0] != atoms[WM_DELETE_WINDOW])
-				break;
-			if ((menu = getmenu(&ctrl->tornoffq, ev.xclient.window)) == NULL)
-				break;
-			if (menustate == STATE_POPUP) {
-				REMOVEPOPPED(ctrl);
-			}
-			TAILQ_REMOVE(&ctrl->tornoffq, menu, entries);
-			delmenu(menu, 1);
-			break;
-		}
+		if (xevents[ev.type])
+			(*xevents[ev.type])(&ev, ctrl);
+		else
+			xevalarm(&ev, ctrl);
 		XAllowEvents(dpy, AsyncKeyboard, CurrentTime);
 		XAllowEvents(dpy, ctrl->passclick ? ReplayPointer : AsyncPointer, CurrentTime);
-		if (XPending(dpy)) {
-			goto nextevent;
-		}
-	} while ((ret = poll(&pfd, 1, timeout)) != -1);
-done:
-	cleanitems(itemq);
+	}
+	cleanitems(ctrl->itemq);
 	XAllowEvents(dpy, AsyncKeyboard, CurrentTime);
 	XAllowEvents(dpy, ReplayPointer, CurrentTime);
 }
@@ -1163,7 +1248,10 @@ enteritem(struct Item *item)
 	}
 	if (efork() == 0) {
 		if (efork() == 0) {
-			eexecshell(cmd, arg);
+			if (item->flags & ITEM_OPENER)
+				eexeccmd(opener, cmd);
+			else
+				eexecshell(cmd, arg);
 			exit(0);
 		}
 		exit(0);
@@ -1187,8 +1275,8 @@ main(int argc, char *argv[])
 	if ((s = getresource("faceName", NULL, NULL)) != NULL)
 		config.faceName = s;
 	for (i = 0; i < COLOR_LAST; i++) {
-		name = (i == COLOR_RUNNER ? "text" : NULL);
-		class = (i == COLOR_RUNNER ? "Text" : NULL);
+		name = (i == COLOR_RUNNER ? "text" : "menu");
+		class = (i == COLOR_RUNNER ? "Text" : "Menu");
 		if ((s = getresource("background", name, class)) != NULL)
 			config.colors[i].background = s;
 		if ((s = getresource("foreground", name, class)) != NULL)
@@ -1231,14 +1319,10 @@ main(int argc, char *argv[])
 		}
 	}
 	config.tornoff = isresourcetrue(getresource("tornoff", NULL, NULL));
-	while ((c = getopt(argc, argv, "a:c:ditr:")) != -1) {
+	while ((c = getopt(argc, argv, "a:ditr:x:")) != -1) {
 		switch (c) {
 		case 'a':
 			config.altkey = optarg;
-			break;
-		case 'c':
-			config.button = optarg;
-			config.mode |= MODE_CONTEXT;
 			break;
 		case 'd':
 			config.mode |= MODE_DOCKAPP;
@@ -1253,6 +1337,10 @@ main(int argc, char *argv[])
 		case 'r':
 			config.runner = optarg;
 			config.mode |= MODE_RUNNER;
+			break;
+		case 'x':
+			config.button = optarg;
+			config.mode |= MODE_CONTEXT;
 			break;
 		default:
 			usage();
@@ -1276,7 +1364,8 @@ main(int argc, char *argv[])
 		usage();
 	}
 	initdc();
-	run(&ctrl, &itemq);
+	ctrl.itemq = &itemq;
+	run(&ctrl);
 	free(config.iconpath);
 	xclose();
 	return 0;

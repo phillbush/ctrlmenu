@@ -11,6 +11,8 @@
 
 #include "ctrlmenu.h"
 
+#define DEFOPENER    "xdg_open" /* default opener */
+#define DEFCALC      "bc"       /* default calculator */
 #define SHELL "sh"
 
 static XRectangle *mons = NULL;                 /* monitors */
@@ -29,6 +31,9 @@ struct DC dc;
 Display *dpy;
 XIM xim;
 Window root;
+XSyncCounter servertime;
+int sync_event;
+char *opener, *calculator;
 
 static int
 xerror(Display *dpy, XErrorEvent *e)
@@ -175,6 +180,14 @@ void
 eexecshell(const char *cmd, const char *arg)
 {
 	if (execlp(SHELL, SHELL, "-c", cmd, SHELL, arg, NULL) == -1) {
+		err(1, "%s", "execlp");
+	}
+}
+
+void
+eexeccmd(const char *cmd, const char *arg)
+{
+	if (execlp(cmd, cmd, arg, NULL) == -1) {
 		err(1, "%s", "execlp");
 	}
 }
@@ -445,66 +458,48 @@ isabsolute(const char *s)
 	return s[0] == '/' || (s[0] == '.' && (s[1] == '/' || (s[1] == '.' && s[2] == '/')));
 }
 
-static Pixmap
-openxpm(Window win, char *file, int issel, int color)
+void
+geticon(Window win, char *file, Pixmap *icon, Pixmap *mask)
 {
-	XGCValues val;
-	XRectangle rect;
 	XpmAttributes attr;
-	Pixmap pix, icon, mask;
-	int status, x, y, i;
+	int status, i;
 	char path[PATH_MAX];
 
-	pix = None;
-	icon = None;
-	mask = None;
+	*icon = None;
+	*mask = None;
 	memset(&attr, 0, sizeof(attr));
 	status = XpmFileInvalid;
 	if (config.niconpaths == 0 || isabsolute(file)) {
-		status = XpmReadFileToPixmap(dpy, win, file, &icon, &mask, &attr);
+		status = XpmReadFileToPixmap(dpy, win, file, icon, mask, &attr);
 	} else {
 		for (i = 0; status != XpmSuccess && i < config.niconpaths; i++) {
 			snprintf(path, sizeof(path), "%s/%s", config.iconpaths[i], file);
-			status = XpmReadFileToPixmap(dpy, win, path, &icon, &mask, &attr);
+			status = XpmReadFileToPixmap(dpy, win, path, icon, mask, &attr);
 		}
 	}
 	if (status != XpmSuccess)
 		goto error;
-	rect = (XRectangle){
-		.x = 0,
-		.y = 0,
-		.width = config.iconsize,
-		.height = config.iconsize,
-	};
-	x = max(0, (config.iconsize - attr.width) / 2);
-	y = max(0, (config.iconsize - attr.height) / 2);
-	if ((pix = createpixmap(rect, win)) == None)
-		goto error;
-	drawrectangle(pix, rect, issel ? dc.colors[color].selbackground.pixel : dc.colors[color].background.pixel);
-	val.clip_x_origin = 0;
-	val.clip_y_origin = 0;
-	val.clip_mask = mask;
-	XChangeGC(dpy, dc.gc, GCClipXOrigin | GCClipYOrigin | GCClipMask, &val);
-	XCopyArea(dpy, icon, pix, dc.gc, 0, 0, rect.width, rect.height, x, y);
-	val.clip_mask = None;
-	XChangeGC(dpy, dc.gc, GCClipXOrigin | GCClipYOrigin | GCClipMask, &val);
-	XFreePixmap(dpy, icon);
-	XFreePixmap(dpy, mask);
-	return pix;
+	return;
 error:
-	XFreePixmap(dpy, pix);
-	XFreePixmap(dpy, icon);
-	XFreePixmap(dpy, mask);
+	if (*icon != None)
+		XFreePixmap(dpy, *icon);
+	if (*mask != None)
+		XFreePixmap(dpy, *mask);
 	warnx("could not open pixmap: %s", file);
-	return None;
 }
 
-Pixmap
-geticon(Window win, char *file, int issel, int color)
+void
+drawicon(Pixmap pix, Pixmap icon, Pixmap mask, int x, int y)
 {
-	if (file == NULL)
-		return None;
-	return openxpm(win, file, issel, color);
+	XGCValues val;
+
+	val.clip_x_origin = x;
+	val.clip_y_origin = y;
+	val.clip_mask = mask;
+	XChangeGC(dpy, dc.gc, GCClipXOrigin | GCClipYOrigin | GCClipMask, &val);
+	XCopyArea(dpy, icon, pix, dc.gc, 0, 0, config.iconsize, config.iconsize, x, y);
+	val.clip_mask = None;
+	XChangeGC(dpy, dc.gc, GCClipMask, &val);
 }
 
 char *
@@ -656,13 +651,23 @@ querypointer(int *x, int *y)
 void
 xinit(int argc, char *argv[])
 {
+	int ncounter, i, tmp;
 	char *xrm;
+	XSyncSystemCounter *counters;
 
+	if ((opener = getenv("OPENER")) == NULL || *opener == '\0')
+		opener = DEFOPENER;
+	if ((calculator = getenv("CALC")) == NULL || *calculator == '\0')
+		calculator = DEFCALC;
 	XInitThreads();
 	if (!setlocale(LC_CTYPE, "") || !XSupportsLocale())
 		warnx("warning: no locale support");
 	if ((dpy = XOpenDisplay(NULL)) == NULL)
 		errx(1, "could not open display");
+	if (!XSyncQueryExtension(dpy, &sync_event, &tmp))
+		errx(1, "XSync extension not available");
+	if (!XSyncInitialize(dpy, &tmp, &tmp))
+		errx(1, "failed to initialize XSync extension");
 	if ((xim = XOpenIM(dpy, NULL, NULL, NULL)) == NULL)
 		errx(1, "XOpenIM: could not open input device");
 	if ((xrm = XResourceManagerString(dpy)) != NULL)
@@ -677,6 +682,19 @@ xinit(int argc, char *argv[])
 	initatoms();
 	savedargc = argc;
 	savedargv = argv;
+	servertime = None;
+	if ((counters = XSyncListSystemCounters(dpy, &ncounter)) != NULL) {
+		for (i = 0; i < ncounter; i++) {
+			if (strcmp(counters[i].name, "SERVERTIME") == 0) {
+				servertime = counters[i].counter;
+				break;
+			}
+		}
+		XSyncFreeSystemCounterList(counters);
+	}
+	if (servertime == None) {
+		errx(1, "SERVERTIME counter not found");
+	}
 }
 
 void

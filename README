@@ -4,14 +4,13 @@ NAME
      ctrlmenu – unified menu system for X11
 
 SYNOPSIS
-     ctrlmenu [-detr] [-a keysym] [-T format] [-R keychord] [-p position]
-              [-x buttonchord] [file]
+     ctrlmenu [-dit] [-a keysym] [-r keychord] [-x buttonspec] [file]
 
 DESCRIPTION
      ctrlmenu is a launcher and menu system for X.  It reads a text file
      describing entries in a hierarchical menu, and creates input methods for
      selecting and entering those entries.  When an entry is selected, its
-     respective command is printed to stdout.
+     respective command is run.
 
      If no file argument is given, or if it is a hyphen “-”, ctrlmenu reads
      from standard input.
@@ -21,36 +20,25 @@ DESCRIPTION
      -a keysym
              Enable the altkey input.  The argument keysym must be the key
              symbol for the alt key (none by default).  Despite its name, this
-             key can be any key.
+             key can be any key.  See the section USAGE for more information
+             on the alt key.
 
      -d      Enable the dockapp.  This option makes show a docked menu on the
-             window manager's dock.
+             window manager's dock.  See the section USAGE for more
+             information on the docked menu.
 
-     -e      Instead of printing the selected entry to standard output, run it
-             on "sh".
-
-     -T format
-             This option specifies the format of the content to be passed to
-             the RUNNER program.  Its value is a comma-separated list of
-             formatting options.  Only two formatting options are supported:
-             “tsv” and “group”.  The “tsv” format outputs to the runner tab-
-             separated entries, one per line; the first field is the entry
-             name, the second is its description, and the third is the entry's
-             command.  The “group” format outputs to the runner entries
-             grouped in blocks separated with blank lines.  Each block has
-             entries belonging to the same submenu, and begins with a line
-             naming the menu itself.  dmenu
+     -i      Match entries case insensitively on the runner.
 
      -t      Enable tornoff menus.  This option can only be used together with
-             -d and/or -x.
+             -d and/or -x.  See the section USAGE for more information on the
+             tornoff menus.
 
-     -R keychord
+     -r keychord
              The argument keychord must be the keychord to invoke the runner
              (A-space, by default).  The keychord must be a keysym, prefixed
              with C- (for Control), S- (for Shift), A- (for Alt), W- (for
-             Super/Win).
-
-     -r      Enable passing the entries to a runner.
+             Super/Win).  See the section USAGE for more information on the
+             runner.
 
      -x buttonspec
              Enable root menu.  This option makes ctrlmenu show the menu when
@@ -62,7 +50,8 @@ DESCRIPTION
              menu), or nothing (for no modifier, making only presses to the
              root window spawn the menu).  The button spec can be also
              suffixed with the letter P to indicate that the click to the root
-             window should be passed to other clients.
+             window should be passed to other clients.  See the section USAGE
+             for more information on the root menu.
 
      Each line read from the specified file or stdin can be a separator, a
      terminal entry, a common meta-entry, or a pipe meta-entry.  Any blank
@@ -81,9 +70,9 @@ DESCRIPTION
      Terminal Entry
              A terminal entry is a line composed by a name, and an optional
              command after two dashes.  A terminal entry appears as an entry
-             in the menu which, when selected, outputs its command (or its
-             name, if the command is not provided).  A terminal entry ends in
-             a newline.
+             in the menu which, when selected, runs its command (or its name,
+             if the command is not provided).  A terminal entry ends in a
+             newline.
 
      Common Meta-Entry
              A common meta-entry is a line composed by a name followed by an
@@ -118,9 +107,9 @@ DESCRIPTION
      corresponding to that character selecs the item.  The extension list is a
      colon-separated list of extensions between braces.
 
-     An icon is the path to a icon to be displayed in the menu before the
-     label.  The path must be prefixed with a “#” character to indicate that
-     it is the path to an icon.
+     An icon is the path to an xpm (pixmap) icon to be displayed in the menu
+     before the label.  The path must be prefixed with a “#” character to
+     indicate that it is the path to an icon.
 
      A keybinding is a sequence of modifiers and a key symbol to be bound for
      the menu entry.  The keybinding must be prefixed with a “!” character to
@@ -149,10 +138,10 @@ USAGE
              menu only works on window managers that docks dockapps, such as
              fluxbox(1).
 
-     Context Menu
-             The context menu is a menu that pops up when the user right-
-             clicks the desktop.  The context menu is only displayed when
-             using the -x command-line option.
+     Root Menu
+             The root menu is a menu that pops up when the user right-clicks
+             the desktop.  The root menu is only displayed when using the -x
+             command-line option.
 
      Tornoff Menu
              A tornoff menu is a menu that appears as a regular window.  A
@@ -172,15 +161,10 @@ USAGE
 
      Runner  The runner is an interactive filter program (like dmenu(1) or
              xprompt(1)) that lists and filters its input as the user types
-             for an entry.  A runner program can be invoked by ctrlmenu by
-             pressing a key chord specified with the -R command-line option;
-             and all menu entries will be given to the runner's stdin.  The
-             runner can only be invoked when using the -r command-line option.
-             The runner program is specified by the RUNNER environment
-             variable.  The format of the content to be passed to the runner
-             is specified by the -T command-line option.
+             for an entry.  The runner opens ctrlmenu by pressing a key chord
+             specified with the -r command-line option.
 
-     Any menu (either the docked menu, the context menu, a tornoff menu or a
+     Any menu (either the docked menu, the root menu, a tornoff menu or a
      popped up menu) can be browsed with the mouse, and each entry can then be
      clicked to be selected.  After a submenu is opened, they can be navigated
      either using the mouse or one of the following keys:
@@ -208,44 +192,27 @@ RESOURCES
      ctrlmenu.faceName
              The typeface to write text with.
 
-     ctrlmenu.itemHeight
-             The height in pixels of each item in the menus.  Default is 24
-             pixels.
+     ctrlmenu.menu.background, ctrlmenu.text.background
+             The colors of the background of the menu and the runner.
 
-     ctrlmenu.iconSize
-             The size in pixels of the icon of items.  Default is 16 pixels.
+     ctrlmenu.menu.foreground, ctrlmenu.text.foreground
+             The colors of the foreground of the menu and the runner.
 
-     ctrlmenu.igoreCase
-             If set to “true”, ignores case on the runner.
+     ctrlmenu.menu.selbackground, ctrlmenu.text.selbackground
+             The colors of the background of the menu and the runner for
+             selected entries.
 
-     ctrlmenu.runnersize
-             The size of the runner.
+     ctrlmenu.menu.selforeground, ctrlmenu.text.selforeground
+             The colors of the foreground of the menu and the runner for
+             selected entries.
 
-     ctrlmenu.background
-             The background color of non-selected entries in the menus.
+     ctrlmenu.menu.altforeground, ctrlmenu.text.altforeground
+             The colors of the foreground of the menu and the runner for
+             alternate (comment) text.
 
-     ctrlmenu.foreground
-             The color of the label text of non-selected entries in the menus.
-
-     ctrlmenu.inputforeground
-             The color of the text in the input field.
-
-     ctrlmenu.inputbackground
-             The color of the input field.
-
-     ctrlmenu.altforeground
-             The color of the descriptive text of non-selected entries in the
-             menus.
-
-     ctrlmenu.altselforeground
-             The color of the descriptive text of selected entries in the
-             menus.
-
-     ctrlmenu.selbackground
-             The background color of selected entries in the menus.
-
-     ctrlmenu.selforeground
-             The color of the label text of selected entries in the menus.
+     ctrlmenu.menu.altselforeground, ctrlmenu.text.altselforeground
+             The colors of the foreground of the menu and the runner for
+             alternate (comment) text in selected entries.
 
      ctrlmenu.topShadow
              The color of the top shadow around the menu
@@ -253,29 +220,28 @@ RESOURCES
      ctrlmenu.bottomShadow
              The color of the bottom shadow around the menu.
 
+     ctrlmenu.itemHeight
+             The height in pixels of each item in the menus.  Default is 24
+             pixels.
+
+     ctrlmenu.iconSize
+             The size in pixels of the icon of items.  Default is 16 pixels.
+
      ctrlmenu.shadowThickness
              Thickness of the 3D shadow effect.
 
      ctrlmenu.gap
              The gap, in pixels, between the menus.
 
-     ctrlmenu.alignment
-             If set to left, center, or right, text is aligned to the left,
-             center, or right of the menu, respectively.  By default, text is
-             aligned to the left.
-
      ctrlmenu.maxItems
              The maximum number of items to be displayed in a menu.  If a menu
              has more items than that value, the menu will feature arrow
              buttons for scrolling.
 
-     ctrlmenu.altKeysym
-             The key symbol to highlight the alt characters on the menu
-             entries.
-
-     ctrlmenu.runnerKeychord
-             The keybinding to open the runner program.  Equivalent to the -R
-             command-line option.
+     ctrlmenu.alignment
+             If set to left, center, or right, text is aligned to the left,
+             center, or right of the menu, respectively.  By default, text is
+             aligned to the left.
 
 ENVIRONMENT
      The following environment variables affect the execution of ctrlmenu.
@@ -286,9 +252,6 @@ ENVIRONMENT
      ICONPATH
              A colon-separated list of paths to look for icons.
 
-     RUNNER  The invocation of the runner program.  The value of this
-             environment variable defaults to “dmenu -i”.
-
 EXAMPLE
      Consider the following script:
 
@@ -296,8 +259,8 @@ EXAMPLE
 
            ctrlmenu -e -x "W-3" <<EOF
            _Applications {
-                   _Web Browser [#./icons/web.png]  -- firefox
-                   _Image Editor [#./icons/web.png] -- gimp
+                   _Web Browser [#./icons/web.xpm]  -- firefox
+                   _Image Editor [#./icons/web.xpm] -- gimp
            }
            _Terminals {
                    Terminal (_xterm) [!A-T] -- xterm
