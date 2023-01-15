@@ -640,25 +640,27 @@ initgrabs(struct Control *ctrl)
 {
 	struct Accelerator *acc;
 	size_t len;
-	char *runner, *button;
+	char *runner, *button, *s;
 
 	if (config.mode & MODE_DOCKAPP) {
 		ctrl->altkey = getkeycode(config.altkey);
 		grabkeysync(ctrl->altkey);
 	}
 	if (config.runner != NULL && config.runner[0] != '\0') {
-		runner = estrdup(runner);
-		ctrl->runnermod = getmod(&runner);
-		ctrl->runnerkey = getkeycode(runner);
+		runner = estrdup(config.runner);
+		s = runner;
+		ctrl->runnermod = getmod(&s);
+		ctrl->runnerkey = getkeycode(s);
 		grabkey(ctrl->runnerkey, ctrl->runnermod);
 		free(runner);
 	}
 	if (config.button != NULL && config.button[0] != '\0') {
 		button = estrdup(config.button);
-		ctrl->buttonmod = getmod(&button);
-		ctrl->button = strtoul(button, NULL, 10);
-		len = strlen(button);
-		if (len > 0 && (button[len-1] == 'P' || button[len-1] == 'p'))
+		s = button;
+		ctrl->buttonmod = getmod(&s);
+		ctrl->button = strtoul(s, NULL, 10);
+		len = strlen(s);
+		if (len > 0 && (s[len-1] == 'P' || s[len-1] == 'p'))
 			ctrl->passclick = 1;
 		grabbuttonsync(ctrl->button);
 		free(button);
