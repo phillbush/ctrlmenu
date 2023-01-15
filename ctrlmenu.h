@@ -197,11 +197,8 @@ struct Config {
 	int runner_items;
 	int tornoff;
 	int itemheight;
-	int fontascent;
 	int shadowThickness;
 	int alignment;
-	int triangle_width;
-	int triangle_height;
 	int iconsize;
 	int mode;
 	int gap;
@@ -213,7 +210,6 @@ struct Config {
 struct DC {
 	FcPattern *pattern;
 	XftFont *face;
-	XftFont **fonts;
 	struct {
 		XftColor background;
 		XftColor foreground;
@@ -225,7 +221,9 @@ struct DC {
 	XftColor topShadow;
 	XftColor bottomShadow;
 	GC gc;
-	int nfonts;
+	int fontascent;
+	int triangle_width;
+	int triangle_height;
 };
 
 extern struct DC dc;

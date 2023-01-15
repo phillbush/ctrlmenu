@@ -114,12 +114,12 @@ drawmenu(struct Menu *menu, struct Item *oldsel, int menutype, int alt, int draw
 	separatorwid = menu->rect.width - 2 * config.shadowThickness - 2 * PADDING;
 	if (menutype == MENU_POPUP) {
 		alt = 1;
-		right = config.shadowThickness + 2 * PADDING + config.triangle_width;
+		right = config.shadowThickness + 2 * PADDING + dc.triangle_width;
 		beg = config.shadowThickness;
 		rect.x = beg;
 		rect.y = beg + TORNOFF_HEIGHT;
 	} else {
-		right = 2 * PADDING + config.triangle_width;
+		right = 2 * PADDING + dc.triangle_width;
 	}
 	textx = separatorx = rect.x + PADDING;
 	if (menu->hasicon)
@@ -137,7 +137,7 @@ drawmenu(struct Menu *menu, struct Item *oldsel, int menutype, int alt, int draw
 		if (item->name == NULL) {
 			drawseparator(menu->pix, separatorx, rect.y + PADDING, separatorwid, 0);
 		} else {
-			texty = rect.y + (rect.height + config.fontascent) / 2;
+			texty = rect.y + (rect.height + dc.fontascent) / 2;
 
 			/* draw rectangle below menu item */
 			drawrectangle(menu->pix, rect, colorbg->pixel);
@@ -185,8 +185,8 @@ drawmenu(struct Menu *menu, struct Item *oldsel, int menutype, int alt, int draw
 				drawtriangle(
 					menu->pix,
 					colorfg->pixel,
-					rect.width - rect.x - PADDING - config.triangle_width,
-					rect.y + (rect.height - config.triangle_height) / 2,
+					rect.width - rect.x - PADDING - dc.triangle_width,
+					rect.y + (rect.height - dc.triangle_height) / 2,
 					DIR_RIGHT
 				);
 			}
@@ -222,8 +222,8 @@ donewithitem:
 		drawtriangle(
 			menu->pix,
 			(menu->selected == &scrollup ? dc.colors[COLOR_MENU].selforeground.pixel : dc.colors[COLOR_MENU].foreground.pixel),
-			rect.x + (menu->rect.width - config.triangle_height) / 2,
-			rect.y + (SEPARATOR_HEIGHT - config.triangle_width) / 2,
+			rect.x + (menu->rect.width - dc.triangle_height) / 2,
+			rect.y + (SEPARATOR_HEIGHT - dc.triangle_width) / 2,
 			DIR_UP
 		);
 		rect.y = menu->rect.height - SEPARATOR_HEIGHT;
@@ -235,8 +235,8 @@ donewithitem:
 		drawtriangle(
 			menu->pix,
 			(menu->selected == &scrolldown ? dc.colors[COLOR_MENU].selforeground.pixel : dc.colors[COLOR_MENU].foreground.pixel),
-			rect.x + (menu->rect.width - config.triangle_height) / 2,
-			rect.y + (SEPARATOR_HEIGHT - config.triangle_width) / 2 - beg,
+			rect.x + (menu->rect.width - dc.triangle_height) / 2,
+			rect.y + (SEPARATOR_HEIGHT - dc.triangle_width) / 2 - beg,
 			DIR_DOWN
 		);
 	}
@@ -370,7 +370,7 @@ insertmenu(struct MenuQueue *menuq, Window parentwin, XRectangle parentrect, str
 		}
 	}
 	menu->rect.width = menu->maxwidth + accelw;
-	menu->rect.width += config.triangle_width + PADDING * 3;     /* PAD + name + PAD + triangle + PAD */
+	menu->rect.width += dc.triangle_width + PADDING * 3;     /* PAD + name + PAD + triangle + PAD */
 	if (menu->hasicon)
 		menu->rect.width += config.iconsize + PADDING;
 	if (type == MENU_POPUP)

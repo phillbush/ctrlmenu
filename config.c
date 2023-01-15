@@ -45,8 +45,6 @@ struct Config config = {
 	.button                 = NULL,
 
 	.itemheight             = 24,
-	.triangle_width         = 4,
-	.triangle_height        = 8,
 	.iconsize               = 16,
 	.iconpath               = NULL,
 };

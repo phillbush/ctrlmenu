@@ -218,30 +218,30 @@ drawtriangle(Drawable pix, unsigned int color, int x, int y, int direction)
 
 	if (direction == DIR_UP) {
 		triangle = (XPoint []){
-			{x, y + config.triangle_width},
-			{x + config.triangle_height / 2, y},
-			{x + config.triangle_height, y + config.triangle_width},
-			{x, y + config.triangle_width}
+			{x, y + dc.triangle_width},
+			{x + dc.triangle_height / 2, y},
+			{x + dc.triangle_height, y + dc.triangle_width},
+			{x, y + dc.triangle_width}
 		};
 	} else if (direction == DIR_DOWN) {
 		triangle = (XPoint []){
 			{x, y},
-			{x + config.triangle_height / 2, y + config.triangle_width},
-			{x + config.triangle_height, y},
+			{x + dc.triangle_height / 2, y + dc.triangle_width},
+			{x + dc.triangle_height, y},
 			{x, y}
 		};
 	} else if (direction == DIR_LEFT) {
 		triangle = (XPoint []){
-			{x + config.triangle_width, y},
-			{x - config.triangle_width, y + config.triangle_height / 2},
-			{x, y + config.triangle_height},
+			{x + dc.triangle_width, y},
+			{x - dc.triangle_width, y + dc.triangle_height / 2},
+			{x, y + dc.triangle_height},
 			{x, y}
 		};
 	} else {
 		triangle = (XPoint []){
 			{x, y},
-			{x + config.triangle_width, y + config.triangle_height / 2},
-			{x, y + config.triangle_height},
+			{x + dc.triangle_width, y + dc.triangle_height / 2},
+			{x, y + dc.triangle_height},
 			{x, y}
 		};
 	}
@@ -722,7 +722,9 @@ initdc(void)
 			errx(1, "could not open font: %s", config.faceName);
 		}
 	}
-	config.fontascent = dc.face->ascent;
+	dc.fontascent = dc.face->ascent;
+	dc.triangle_height = 2 * max(4, dc.face->height / 4);
+	dc.triangle_width = dc.triangle_height / 2;
 
 	dc.gc = XCreateGC(dpy, root, 0, NULL);
 }
