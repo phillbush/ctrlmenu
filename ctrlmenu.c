@@ -640,23 +640,28 @@ initgrabs(struct Control *ctrl)
 {
 	struct Accelerator *acc;
 	size_t len;
+	char *runner, *button;
 
 	if (config.mode & MODE_DOCKAPP) {
 		ctrl->altkey = getkeycode(config.altkey);
 		grabkeysync(ctrl->altkey);
 	}
 	if (config.runner != NULL && config.runner[0] != '\0') {
-		ctrl->runnermod = getmod(&config.runner);
-		ctrl->runnerkey = getkeycode(config.runner);
+		runner = estrdup(runner);
+		ctrl->runnermod = getmod(&runner);
+		ctrl->runnerkey = getkeycode(runner);
 		grabkey(ctrl->runnerkey, ctrl->runnermod);
+		free(runner);
 	}
 	if (config.button != NULL && config.button[0] != '\0') {
-		ctrl->buttonmod = getmod(&config.button);
-		ctrl->button = strtoul(config.button, NULL, 10);
-		len = strlen(config.button);
-		if (len > 0 && (config.button[len-1] == 'P' || config.button[len-1] == 'p'))
+		button = estrdup(config.button);
+		ctrl->buttonmod = getmod(&button);
+		ctrl->button = strtoul(button, NULL, 10);
+		len = strlen(button);
+		if (len > 0 && (button[len-1] == 'P' || button[len-1] == 'p'))
 			ctrl->passclick = 1;
 		grabbuttonsync(ctrl->button);
+		free(button);
 	}
 	TAILQ_FOREACH(acc, &ctrl->accq, entries) {
 		grabkey(acc->key, acc->mods);
