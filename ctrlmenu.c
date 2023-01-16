@@ -1255,6 +1255,7 @@ enteritem(struct Item *item)
 	}
 	if (efork() == 0) {
 		if (efork() == 0) {
+			esetsid();
 			if (item->flags & ITEM_OPENER)
 				eexeccmd(opener, cmd);
 			else

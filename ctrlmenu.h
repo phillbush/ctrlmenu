@@ -256,6 +256,7 @@ void eexecshell(const char *cmd, const char *arg);
 void eexeccmd(const char *cmd, const char *arg);
 void edup2(int fd1, int fd2);
 pid_t efork(void);
+void esetsid(void);
 void xinit(int argc, char *argv[]);
 void initdc(void);
 void xclose(void);

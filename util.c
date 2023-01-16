@@ -211,6 +211,14 @@ efork(void)
 }
 
 void
+esetsid(void)
+{
+	if (setsid() == -1) {
+		err(1, "setsid");
+	}
+}
+
+void
 drawtriangle(Drawable pix, unsigned int color, int x, int y, int direction)
 {
 	XPoint *triangle;
