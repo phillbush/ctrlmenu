@@ -1143,6 +1143,10 @@ xevclient(XEvent *e, struct Control *ctrl)
 	/* user may have closed tornoff window */
 	if ((Atom)xev->data.l[0] != atoms[WM_DELETE_WINDOW])
 		return;
+	if (xev->window == ctrl->docked.win) {
+		ctrl->running = 0;
+		return;
+	}
 	if ((menu = getmenu(&ctrl->tornoffq, xev->window)) == NULL)
 		return;
 	if (ctrl->menustate == STATE_POPUP)
