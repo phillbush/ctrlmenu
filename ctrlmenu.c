@@ -270,6 +270,7 @@ setdockedmenu(struct Menu *root, struct ItemQueue *itemq)
 		.caller = NULL,
 		.overflow = 0,
 		.maxwidth = 0,
+		.hasicon = 0,
 		.isgen = 0,
 		.selected = NULL,
 		.pix = None,
@@ -1211,7 +1212,7 @@ run(struct Control *ctrl)
 	while (ctrl->running && !XNextEvent(dpy, &ev)) {
 		if (XFilterEvent(&ev, None))
 			continue;
-		if (xevents[ev.type])
+		if (ev.type < LASTEvent && xevents[ev.type])
 			(*xevents[ev.type])(&ev, ctrl);
 		else
 			xevalarm(&ev, ctrl);
