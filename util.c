@@ -221,38 +221,27 @@ esetsid(void)
 void
 drawtriangle(Drawable pix, unsigned int color, int x, int y, int direction)
 {
-	XPoint *triangle;
 #define NPOINTS 4
+	XPoint triangle[NPOINTS];
 
 	if (direction == DIR_UP) {
-		triangle = (XPoint []){
-			{x, y + dc.triangle_width},
-			{x + dc.triangle_height / 2, y},
-			{x + dc.triangle_height, y + dc.triangle_width},
-			{x, y + dc.triangle_width}
-		};
+		triangle[0] = (XPoint){x, y + dc.triangle_width},
+		triangle[1] = (XPoint){x + dc.triangle_height / 2, y},
+		triangle[2] = (XPoint){x + dc.triangle_height, y + dc.triangle_width},
 	} else if (direction == DIR_DOWN) {
-		triangle = (XPoint []){
-			{x, y},
-			{x + dc.triangle_height / 2, y + dc.triangle_width},
-			{x + dc.triangle_height, y},
-			{x, y}
-		};
+		triangle[0] = (XPoint){x, y},
+		triangle[1] = (XPoint){x + dc.triangle_height / 2, y + dc.triangle_width},
+		triangle[2] = (XPoint){x + dc.triangle_height, y},
 	} else if (direction == DIR_LEFT) {
-		triangle = (XPoint []){
-			{x + dc.triangle_width, y},
-			{x - dc.triangle_width, y + dc.triangle_height / 2},
-			{x, y + dc.triangle_height},
-			{x, y}
-		};
+		triangle[0] = (XPoint){x + dc.triangle_width, y},
+		triangle[1] = (XPoint){x - dc.triangle_width, y + dc.triangle_height / 2},
+		triangle[2] = (XPoint){x, y + dc.triangle_height},
 	} else {
-		triangle = (XPoint []){
-			{x, y},
-			{x + dc.triangle_width, y + dc.triangle_height / 2},
-			{x, y + dc.triangle_height},
-			{x, y}
-		};
+		triangle[0] = (XPoint){x, y},
+		triangle[1] = (XPoint){x + dc.triangle_width, y + dc.triangle_height / 2},
+		triangle[2] = (XPoint){x, y + dc.triangle_height},
 	}
+	triangle[3] = triangle[0];
 	XSetForeground(dpy, dc.gc, color);
 	XFillPolygon(
 		dpy,
