@@ -67,6 +67,7 @@ struct Control {
 	struct AcceleratorQueue accq;
 
 	KeyCode altkey;
+	int altpressed;
 
 	unsigned int button;
 	unsigned int buttonmod;
@@ -643,9 +644,14 @@ initgrabs(struct Control *ctrl)
 	size_t len;
 	char *runner, *button, *s;
 
+	ctrl->altkey = 0;
+	ctrl->runnerkey = 0;
+	ctrl->runnermod = 0;
+	ctrl->buttonmod = 0;
+	ctrl->button = 0;
 	if (config.mode & MODE_DOCKAPP) {
 		ctrl->altkey = getkeycode(config.altkey);
-		grabkeysync(ctrl->altkey);
+		grabkey(ctrl->altkey, AnyModifier);
 	}
 	if (config.runner != NULL && config.runner[0] != '\0') {
 		runner = estrdup(config.runner);
@@ -1018,11 +1024,13 @@ xevkrelease(XEvent *e, struct Control *ctrl)
 	XKeyEvent *xev;
 
 	xev = &e->xkey;
-	if (xev->keycode == ctrl->altkey) {
-		if (ctrl->menustate != STATE_ALTPRESSED)
-			return;
-		drawmenu(&ctrl->docked, NULL, MENU_DOCKAPP, 0, 1);
-		ungrab();
+	if (ctrl->altpressed && xev->keycode == ctrl->altkey && ctrl->menustate != STATE_POPUP) {
+		ctrl->menustate = STATE_ALTPRESSED;
+		ctrl->docked.selected = NULL;
+		(void)itemcycle(&ctrl->docked, MENU_DOCKAPP, 1);
+		grab(GRAB_KEYBOARD);
+		drawmenu(&ctrl->docked, NULL, MENU_DOCKAPP, 1, 1);
+		return;
 	}
 }
 
@@ -1038,11 +1046,18 @@ xevkpress(XEvent *e, struct Control *ctrl)
 
 	xev = &e->xkey;
 	ksym = XkbKeycodeToKeysym(dpy, xev->keycode, 0, 0);
+	ctrl->altpressed = 0;
 	if (ksym == XK_Tab && (xev->state & ShiftMask))        /* Shift-Tab = ISO_Left_Tab */
 		ksym = XK_ISO_Left_Tab;
 	if (ksym == XK_Escape && ctrl->menustate == STATE_POPUP) {
 		/* esc closes popped up menu when current menu is the root menu */
 		removepopped(ctrl);
+		return;
+	} else if (ksym == XK_Escape && ctrl->menustate == STATE_ALTPRESSED) {
+		ctrl->menustate = STATE_NORMAL;
+		ctrl->docked.selected = NULL;
+		ungrab();
+		drawmenu(&ctrl->docked, NULL, MENU_DOCKAPP, 0, 1);
 		return;
 	} else if (ctrl->promptopen && xev->window == ctrl->promptwin) {
 		/* pass key to prompt */
@@ -1060,39 +1075,37 @@ xevkpress(XEvent *e, struct Control *ctrl)
 	} else if ((item = matchacc(&ctrl->accq, xev->keycode, xev->state)) != NULL) {
 		/* enter item via accelerator keychord */
 		enteritem(item);
+		ungrab();
 		if (ctrl->menustate == STATE_POPUP) {
 			removepopped(ctrl);
 		}
 		return;
-	} else if ((config.mode & MODE_DOCKAPP) && xev->keycode == ctrl->altkey) {
-		/* underline altchar on docked menu */
-		if (ctrl->menustate == STATE_POPUP)
-			return;
-		ctrl->menustate = STATE_ALTPRESSED;
-		grab(GRAB_KEYBOARD);
-		drawmenu(&ctrl->docked, NULL, MENU_DOCKAPP, 1, 1);
+	} else if (xev->keycode == ctrl->altkey) {
+		ctrl->altpressed = 1;
+		XAllowEvents(dpy, ReplayKeyboard, xev->time);
 		return;
 	}
-	menu = gettopmenu(ctrl);
+	if ((menu = gettopmenu(ctrl)) == NULL)
+		menu = &ctrl->docked;
 	if (menu != NULL)
 		type = getmenutype(ctrl, menu);
-	if (menu != NULL && ctrl->menustate == STATE_POPUP && (ksym == XK_Tab || ksym == XK_Down)) {
+	if (menu != NULL && ctrl->menustate != STATE_NORMAL && (ksym == XK_Tab || ksym == XK_Down)) {
 		oldsel = menu->selected;
 		scrolled = itemcycle(menu, type, 1);
 		drawmenu(menu, oldsel, type, menu == &ctrl->docked && ctrl->menustate == STATE_ALTPRESSED, scrolled);
-	} else if (menu != NULL && ctrl->menustate == STATE_POPUP && (ksym == XK_ISO_Left_Tab || ksym == XK_Up)) {
+	} else if (menu != NULL && ctrl->menustate != STATE_NORMAL && (ksym == XK_ISO_Left_Tab || ksym == XK_Up)) {
 		oldsel = menu->selected;
 		scrolled = itemcycle(menu, type, 0);
 		drawmenu(menu, oldsel, type, menu == &ctrl->docked && ctrl->menustate == STATE_ALTPRESSED, scrolled);
-	} else if (menu != NULL && ctrl->menustate == STATE_POPUP && (ksym == XK_Return || ksym == XK_Right) && menu->selected != NULL) {
+	} else if (menu != NULL && ctrl->menustate != STATE_NORMAL && (ksym == XK_Return || ksym == XK_Right) && menu->selected != NULL) {
 		item = menu->selected;
 		(void)getitempred(menu, type, checkselected, menu, &y);
 		openitem(ctrl, menu, item, False, False, y);
 		return;
-	} else if (menu != NULL && ctrl->menustate == STATE_POPUP && ksym == XK_Left && menu != TAILQ_LAST(&ctrl->popupq, MenuQueue)) {
+	} else if (menu != NULL && ctrl->menustate != STATE_NORMAL && ksym == XK_Left && menu != TAILQ_LAST(&ctrl->popupq, MenuQueue)) {
 		delmenus(&ctrl->popupq, menu);
 		return;
-	} else if (xev->window == root && (ctrl->menustate == STATE_ALTPRESSED || ctrl->menustate == STATE_POPUP)) {
+	} else if (xev->window == root && ctrl->menustate != STATE_NORMAL) {
 		/* enter item via alt key */
 		if ((menu = TAILQ_FIRST(&ctrl->popupq)) == NULL)
 			menu = &ctrl->docked;
@@ -1165,6 +1178,15 @@ xevalarm(XEvent *e, struct Control *ctrl)
 	XSyncChangeAlarm(dpy, ctrl->alarm, ALARMFLAGS, &ctrl->attr);
 }
 
+static void
+xevmapping(XEvent *e, struct Control *ctrl)
+{
+	(void)e;
+	XUngrabButton(dpy, AnyButton, AnyModifier, root);
+	XUngrabKey(dpy, AnyKey, AnyModifier, root);
+	initgrabs(ctrl);
+}
+
 static void (*xevents[LASTEvent])(XEvent *, struct Control *) = {
 	[ButtonPress]           = xevbpress,
 	[ButtonRelease]         = xevbrelease,
@@ -1174,6 +1196,7 @@ static void (*xevents[LASTEvent])(XEvent *, struct Control *) = {
 	[KeyPress]              = xevkpress,
 	[KeyRelease]            = xevkrelease,
 	[LeaveNotify]           = xevleave,
+	[MappingNotify]         = xevmapping,
 	[MotionNotify]          = xevmotion,
 };
 
