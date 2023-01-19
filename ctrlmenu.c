@@ -886,6 +886,25 @@ openitem(struct Control *ctrl, struct Menu *menu, struct Item *item, int delete,
 }
 
 static void
+enteralt(struct Control *ctrl)
+{
+	ctrl->menustate = STATE_ALTPRESSED;
+	ctrl->docked.selected = NULL;
+	(void)itemcycle(&ctrl->docked, MENU_DOCKAPP, 1);
+	grab(GRAB_KEYBOARD);
+	drawmenu(&ctrl->docked, NULL, MENU_DOCKAPP, 1, 1);
+}
+
+static void
+exitalt(struct Control *ctrl)
+{
+	ctrl->menustate = STATE_NORMAL;
+	ctrl->docked.selected = NULL;
+	ungrab();
+	drawmenu(&ctrl->docked, NULL, MENU_DOCKAPP, 0, 1);
+}
+
+static void
 xevexpose(XEvent *e, struct Control *ctrl)
 {
 	XExposeEvent *xev;
@@ -924,6 +943,7 @@ xevbpress(XEvent *e, struct Control *ctrl)
 
 	if (xev->window != root || invalidbutton(xev->button))
 		return;
+	exitalt(ctrl);
 	if (ctrl->menustate == STATE_NORMAL &&
 	    (config.mode & MODE_CONTEXT) &&
 	    xev->button == ctrl->button &&
@@ -960,6 +980,7 @@ xevmotion(XEvent *e, struct Control *ctrl)
 	menu = getopenmenu(ctrl, xev->window);
 	if (menu == NULL)
 		return;
+	exitalt(ctrl);
 	type = getmenutype(ctrl, menu);
 	item = getitem(menu, type, xev->y, &y);
 	if (item != menu->selected) {
@@ -1025,12 +1046,7 @@ xevkrelease(XEvent *e, struct Control *ctrl)
 
 	xev = &e->xkey;
 	if (ctrl->altpressed && xev->keycode == ctrl->altkey && ctrl->menustate != STATE_POPUP) {
-		ctrl->menustate = STATE_ALTPRESSED;
-		ctrl->docked.selected = NULL;
-		(void)itemcycle(&ctrl->docked, MENU_DOCKAPP, 1);
-		grab(GRAB_KEYBOARD);
-		drawmenu(&ctrl->docked, NULL, MENU_DOCKAPP, 1, 1);
-		return;
+		enteralt(ctrl);
 	}
 }
 
@@ -1049,15 +1065,11 @@ xevkpress(XEvent *e, struct Control *ctrl)
 	ctrl->altpressed = 0;
 	if (ksym == XK_Tab && (xev->state & ShiftMask))        /* Shift-Tab = ISO_Left_Tab */
 		ksym = XK_ISO_Left_Tab;
+	if (ksym == XK_Escape && ctrl->menustate == STATE_ALTPRESSED)
+		exitalt(ctrl);
 	if (ksym == XK_Escape && ctrl->menustate == STATE_POPUP) {
 		/* esc closes popped up menu when current menu is the root menu */
 		removepopped(ctrl);
-		return;
-	} else if (ksym == XK_Escape && ctrl->menustate == STATE_ALTPRESSED) {
-		ctrl->menustate = STATE_NORMAL;
-		ctrl->docked.selected = NULL;
-		ungrab();
-		drawmenu(&ctrl->docked, NULL, MENU_DOCKAPP, 0, 1);
 		return;
 	} else if (ctrl->promptopen && xev->window == ctrl->promptwin) {
 		/* pass key to prompt */
@@ -1085,6 +1097,7 @@ xevkpress(XEvent *e, struct Control *ctrl)
 		XAllowEvents(dpy, ReplayKeyboard, xev->time);
 		return;
 	}
+	exitalt(ctrl);
 	if ((menu = gettopmenu(ctrl)) == NULL)
 		menu = &ctrl->docked;
 	if (menu != NULL)
