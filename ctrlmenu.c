@@ -943,8 +943,7 @@ xevbpress(XEvent *e, struct Control *ctrl)
 
 	if (xev->window != root || invalidbutton(xev->button))
 		return;
-	exitalt(ctrl);
-	if (ctrl->menustate == STATE_NORMAL &&
+	if (ctrl->menustate != STATE_POPUP &&
 	    (config.mode & MODE_CONTEXT) &&
 	    xev->button == ctrl->button &&
 	    (ctrl->buttonmod == AnyModifier ||
@@ -980,7 +979,6 @@ xevmotion(XEvent *e, struct Control *ctrl)
 	menu = getopenmenu(ctrl, xev->window);
 	if (menu == NULL)
 		return;
-	exitalt(ctrl);
 	type = getmenutype(ctrl, menu);
 	item = getitem(menu, type, xev->y, &y);
 	if (item != menu->selected) {
@@ -1065,9 +1063,10 @@ xevkpress(XEvent *e, struct Control *ctrl)
 	ctrl->altpressed = 0;
 	if (ksym == XK_Tab && (xev->state & ShiftMask))        /* Shift-Tab = ISO_Left_Tab */
 		ksym = XK_ISO_Left_Tab;
-	if (ksym == XK_Escape && ctrl->menustate == STATE_ALTPRESSED)
+	if (ctrl->menustate == STATE_ALTPRESSED) {
 		exitalt(ctrl);
-	if (ksym == XK_Escape && ctrl->menustate == STATE_POPUP) {
+		return;
+	} else if (ksym == XK_Escape && ctrl->menustate == STATE_POPUP) {
 		/* esc closes popped up menu when current menu is the root menu */
 		removepopped(ctrl);
 		return;
@@ -1256,11 +1255,9 @@ run(struct Control *ctrl)
 			(*xevents[ev.type])(&ev, ctrl);
 		else
 			xevalarm(&ev, ctrl);
-		XAllowEvents(dpy, AsyncKeyboard, CurrentTime);
 		XAllowEvents(dpy, ctrl->passclick ? ReplayPointer : AsyncPointer, CurrentTime);
 	}
 	cleanitems(ctrl->itemq);
-	XAllowEvents(dpy, AsyncKeyboard, CurrentTime);
 	XAllowEvents(dpy, ReplayPointer, CurrentTime);
 }
 
