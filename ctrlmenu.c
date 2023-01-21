@@ -888,6 +888,8 @@ openitem(struct Control *ctrl, struct Menu *menu, struct Item *item, int delete,
 static void
 enteralt(struct Control *ctrl)
 {
+	if (!(config.mode & MODE_DOCKAPP))
+		return;
 	ctrl->menustate = STATE_ALT;
 	ctrl->docked.selected = NULL;
 	(void)itemcycle(&ctrl->docked, MENU_DOCKAPP, 1);
