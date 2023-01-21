@@ -890,6 +890,8 @@ enteralt(struct Control *ctrl)
 {
 	if (!(config.mode & MODE_DOCKAPP))
 		return;
+	if (ctrl->menustate != STATE_NORMAL)
+		return;
 	ctrl->menustate = STATE_ALT;
 	ctrl->docked.selected = NULL;
 	(void)itemcycle(&ctrl->docked, MENU_DOCKAPP, 1);
@@ -1089,6 +1091,7 @@ xevkpress(XEvent *e, struct Control *ctrl)
 		/* open prompt */
 		mapprompt(ctrl->prompt);
 		redrawprompt(ctrl->prompt);
+		exitalt(ctrl);
 		XFlush(dpy);
 		return;
 	} else if ((item = matchacc(&ctrl->accq, xev->keycode, xev->state)) != NULL) {
