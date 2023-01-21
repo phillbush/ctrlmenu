@@ -580,7 +580,7 @@ grabkeysync(KeyCode key)
 		AnyModifier,
 		root,
 		False,
-		GrabModeAsync,
+		GrabModeSync,
 		GrabModeSync
 	);
 }

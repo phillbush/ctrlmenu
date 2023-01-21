@@ -59,8 +59,8 @@ struct Control {
 	 * open right now.
 	 */
 	enum {
-		STATE_NORMAL,           /* no popped up menu, alt key not pressed */
-		STATE_ALTPRESSED,       /* no popped up menu, alt key pressed */
+		STATE_NORMAL,           /* no popped up menu, alt key not released */
+		STATE_ALT,              /* no popped up menu, alt key released */
 		STATE_POPUP,            /* popped up menu, alt key ignored */
 	} menustate;
 
@@ -651,7 +651,7 @@ initgrabs(struct Control *ctrl)
 	ctrl->button = 0;
 	if (config.mode & MODE_DOCKAPP) {
 		ctrl->altkey = getkeycode(config.altkey);
-		grabkey(ctrl->altkey, AnyModifier);
+		grabkeysync(ctrl->altkey);
 	}
 	if (config.runner != NULL && config.runner[0] != '\0') {
 		runner = estrdup(config.runner);
@@ -888,19 +888,20 @@ openitem(struct Control *ctrl, struct Menu *menu, struct Item *item, int delete,
 static void
 enteralt(struct Control *ctrl)
 {
-	ctrl->menustate = STATE_ALTPRESSED;
+	ctrl->menustate = STATE_ALT;
 	ctrl->docked.selected = NULL;
 	(void)itemcycle(&ctrl->docked, MENU_DOCKAPP, 1);
-	grab(GRAB_KEYBOARD);
 	drawmenu(&ctrl->docked, NULL, MENU_DOCKAPP, 1, 1);
 }
 
 static void
 exitalt(struct Control *ctrl)
 {
+	ungrab();
+	if (!(config.mode & MODE_DOCKAPP))
+		return;
 	ctrl->menustate = STATE_NORMAL;
 	ctrl->docked.selected = NULL;
-	ungrab();
 	drawmenu(&ctrl->docked, NULL, MENU_DOCKAPP, 0, 1);
 }
 
@@ -921,15 +922,16 @@ xevleave(XEvent *e, struct Control *ctrl)
 	XLeaveWindowEvent *xev;
 	struct Menu *menu;
 	struct Item *oldsel;
-	int type;
+	int type, alt;
 
 	xev = &e->xcrossing;
 	if ((menu = getopenmenu(ctrl, xev->window)) == NULL)
 		return;
 	type = getmenutype(ctrl, menu);
+	alt = type == MENU_DOCKAPP && ctrl->menustate == STATE_ALT;
 	if ((oldsel = menu->selected) != NULL) {
 		menu->selected = NULL;
-		drawmenu(menu, oldsel, type, 0, 0);
+		drawmenu(menu, oldsel, type, alt, 0);
 	}
 }
 
@@ -972,7 +974,7 @@ xevmotion(XEvent *e, struct Control *ctrl)
 	struct Menu *menu;
 	struct Item *item, *oldsel;
 	XMotionEvent *xev;
-	int type, y;
+	int type, alt, y;
 
 	xev = &e->xmotion;
 
@@ -980,11 +982,12 @@ xevmotion(XEvent *e, struct Control *ctrl)
 	if (menu == NULL)
 		return;
 	type = getmenutype(ctrl, menu);
+	alt = type == MENU_DOCKAPP && ctrl->menustate == STATE_ALT;
 	item = getitem(menu, type, xev->y, &y);
 	if (item != menu->selected) {
 		oldsel = menu->selected;
 		menu->selected = item;
-		drawmenu(menu, oldsel, type, 0, 0);
+		drawmenu(menu, oldsel, type, alt, 0);
 	}
 	if (item == &scrollup || item == &scrolldown) {
 		/* motion over scroll buttons */
@@ -1008,7 +1011,7 @@ xevbrelease(XEvent *e, struct Control *ctrl)
 	struct Menu *menu;
 	struct Item *item, *oldsel;
 	XButtonEvent *xev;
-	int type, y;
+	int type, alt, y;
 
 	xev = &e->xbutton;
 	if (invalidbutton(xev->button))
@@ -1017,11 +1020,12 @@ xevbrelease(XEvent *e, struct Control *ctrl)
 	if (menu == NULL)
 		return;
 	type = getmenutype(ctrl, menu);
+	alt = type == MENU_DOCKAPP && ctrl->menustate == STATE_ALT;
 	item = getitem(menu, type, xev->y, &y);
 	if (item != menu->selected) {
 		oldsel = menu->selected;
 		menu->selected = item;
-		drawmenu(menu, oldsel, type, 0, 0);
+		drawmenu(menu, oldsel, type, alt, 0);
 	}
 	if (item == NULL)
 		return;
@@ -1044,6 +1048,8 @@ xevkrelease(XEvent *e, struct Control *ctrl)
 
 	xev = &e->xkey;
 	if (ctrl->altpressed && xev->keycode == ctrl->altkey && ctrl->menustate != STATE_POPUP) {
+		XAllowEvents(dpy, ReplayKeyboard, xev->time);
+		XFlush(dpy);
 		enteralt(ctrl);
 	}
 }
@@ -1055,7 +1061,7 @@ xevkpress(XEvent *e, struct Control *ctrl)
 	struct Item *item, *oldsel;
 	XKeyEvent *xev;
 	KeySym ksym;
-	int scrolled, type, len, operation, y;
+	int scrolled, type, len, operation, alt, y;
 	char buf[INPUTSIZ];
 
 	xev = &e->xkey;
@@ -1063,7 +1069,7 @@ xevkpress(XEvent *e, struct Control *ctrl)
 	ctrl->altpressed = 0;
 	if (ksym == XK_Tab && (xev->state & ShiftMask))        /* Shift-Tab = ISO_Left_Tab */
 		ksym = XK_ISO_Left_Tab;
-	if (ctrl->menustate == STATE_ALTPRESSED) {
+	if (ksym == XK_Escape && ctrl->menustate == STATE_ALT) {
 		exitalt(ctrl);
 		return;
 	} else if (ksym == XK_Escape && ctrl->menustate == STATE_POPUP) {
@@ -1086,7 +1092,7 @@ xevkpress(XEvent *e, struct Control *ctrl)
 	} else if ((item = matchacc(&ctrl->accq, xev->keycode, xev->state)) != NULL) {
 		/* enter item via accelerator keychord */
 		enteritem(item);
-		ungrab();
+		exitalt(ctrl);
 		if (ctrl->menustate == STATE_POPUP) {
 			removepopped(ctrl);
 		}
@@ -1094,21 +1100,24 @@ xevkpress(XEvent *e, struct Control *ctrl)
 	} else if (xev->keycode == ctrl->altkey) {
 		ctrl->altpressed = 1;
 		XAllowEvents(dpy, ReplayKeyboard, xev->time);
+		XFlush(dpy);
+		grab(GRAB_KEYBOARD);
 		return;
 	}
-	exitalt(ctrl);
 	if ((menu = gettopmenu(ctrl)) == NULL)
 		menu = &ctrl->docked;
-	if (menu != NULL)
+	if (menu != NULL) {
 		type = getmenutype(ctrl, menu);
+		alt = type == MENU_DOCKAPP && ctrl->menustate == STATE_ALT;
+	}
 	if (menu != NULL && ctrl->menustate != STATE_NORMAL && (ksym == XK_Tab || ksym == XK_Down)) {
 		oldsel = menu->selected;
 		scrolled = itemcycle(menu, type, 1);
-		drawmenu(menu, oldsel, type, menu == &ctrl->docked && ctrl->menustate == STATE_ALTPRESSED, scrolled);
+		drawmenu(menu, oldsel, type, alt, scrolled);
 	} else if (menu != NULL && ctrl->menustate != STATE_NORMAL && (ksym == XK_ISO_Left_Tab || ksym == XK_Up)) {
 		oldsel = menu->selected;
 		scrolled = itemcycle(menu, type, 0);
-		drawmenu(menu, oldsel, type, menu == &ctrl->docked && ctrl->menustate == STATE_ALTPRESSED, scrolled);
+		drawmenu(menu, oldsel, type, alt, scrolled);
 	} else if (menu != NULL && ctrl->menustate != STATE_NORMAL && (ksym == XK_Return || ksym == XK_Right) && menu->selected != NULL) {
 		item = menu->selected;
 		(void)getitempred(menu, type, checkselected, menu, &y);
@@ -1126,7 +1135,7 @@ xevkpress(XEvent *e, struct Control *ctrl)
 			return;
 		oldsel = menu->selected;
 		menu->selected = item;
-		if (ctrl->menustate == STATE_ALTPRESSED) {
+		if (ctrl->menustate == STATE_ALT) {
 			ctrl->menustate = STATE_NORMAL;
 			ungrab();
 		}
@@ -1134,12 +1143,14 @@ xevkpress(XEvent *e, struct Control *ctrl)
 		openitem(ctrl, menu, item, False, False, y);
 	} else if ((config.mode & MODE_RUNNER) && xev->window == root) {
 		operation = getoperation(ctrl->prompt, xev, buf, INPUTSIZ, &ksym, &len);
-		if (operation != INSERT)
+		if (operation != INSERT || ctrl->altpressed)
 			return;
 		mapprompt(ctrl->prompt);
 		redrawprompt(ctrl->prompt);
 		promptkey(ctrl->prompt, buf, len, operation);
 		XFlush(dpy);
+	} else if (ctrl->menustate == STATE_NORMAL) {
+		exitalt(ctrl);
 	}
 }
 
@@ -1148,14 +1159,15 @@ xevconfigure(XEvent *e, struct Control *ctrl)
 {
 	struct Menu *menu;
 	XConfigureEvent *xev;
-	int type;
+	int type, alt;
 
 	xev = &e->xconfigure;
 	if ((menu = getopenmenu(ctrl, xev->window)) == NULL)
 		return;
 	type = getmenutype(ctrl, menu);
+	alt = type == MENU_DOCKAPP && ctrl->menustate == STATE_ALT;
 	configuremenu(menu, xev->x, xev->y, xev->width, xev->height);
-	drawmenu(menu, NULL, type, menu == &ctrl->docked && ctrl->menustate == STATE_ALTPRESSED, 1);
+	drawmenu(menu, NULL, type, alt, 1);
 }
 
 static void
@@ -1250,14 +1262,16 @@ run(struct Control *ctrl)
 	ctrl->running = 1;
 	while (ctrl->running && !XNextEvent(dpy, &ev)) {
 		if (XFilterEvent(&ev, None))
-			continue;
-		if (ev.type < LASTEvent && xevents[ev.type])
+			;
+		else if (ev.type < LASTEvent && xevents[ev.type])
 			(*xevents[ev.type])(&ev, ctrl);
 		else
 			xevalarm(&ev, ctrl);
+		XAllowEvents(dpy, ReplayKeyboard, CurrentTime);
 		XAllowEvents(dpy, ctrl->passclick ? ReplayPointer : AsyncPointer, CurrentTime);
 	}
 	cleanitems(ctrl->itemq);
+	XAllowEvents(dpy, ReplayKeyboard, CurrentTime);
 	XAllowEvents(dpy, ReplayPointer, CurrentTime);
 }
 
