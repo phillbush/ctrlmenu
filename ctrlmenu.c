@@ -682,6 +682,8 @@ removepopped(struct Control *ctrl)
 {
 	struct Menu *firstpopped;
 
+	if (ctrl->menustate != STATE_POPUP)
+		return;
 	ungrab();
 	firstpopped = TAILQ_LAST(&ctrl->popupq, MenuQueue);
 	delmenus(&ctrl->popupq, firstpopped);
@@ -901,8 +903,9 @@ enteralt(struct Control *ctrl)
 static void
 exitalt(struct Control *ctrl)
 {
-	ungrab();
 	if (!(config.mode & MODE_DOCKAPP))
+		return;
+	if (ctrl->menustate != STATE_ALT)
 		return;
 	ctrl->menustate = STATE_NORMAL;
 	ctrl->docked.selected = NULL;
@@ -942,13 +945,20 @@ xevleave(XEvent *e, struct Control *ctrl)
 static void
 xevbpress(XEvent *e, struct Control *ctrl)
 {
+	struct Menu *menu;
 	XButtonEvent *xev;
 	XRectangle rect;
 
 	xev = &e->xbutton;
 
-	if (xev->window != root || invalidbutton(xev->button))
+	exitalt(ctrl);
+	if (xev->window != root || invalidbutton(xev->button)) {
+		if (ctrl->menustate == STATE_ALT && (menu = getopenmenu(ctrl, xev->window)) == NULL) {
+			ungrab();
+			exitalt(ctrl);
+		}
 		return;
+	}
 	if (ctrl->menustate != STATE_POPUP &&
 	    (config.mode & MODE_CONTEXT) &&
 	    xev->button == ctrl->button &&
@@ -1051,10 +1061,15 @@ xevkrelease(XEvent *e, struct Control *ctrl)
 	XKeyEvent *xev;
 
 	xev = &e->xkey;
-	if (ctrl->altpressed && xev->keycode == ctrl->altkey && ctrl->menustate != STATE_POPUP) {
+	if (ctrl->menustate == STATE_POPUP)
+		return;
+	if (ctrl->altpressed && xev->keycode == ctrl->altkey) {
 		XAllowEvents(dpy, ReplayKeyboard, xev->time);
 		XFlush(dpy);
 		enteralt(ctrl);
+	} else {
+		ungrab();
+		exitalt(ctrl);
 	}
 }
 
@@ -1073,12 +1088,11 @@ xevkpress(XEvent *e, struct Control *ctrl)
 	ctrl->altpressed = 0;
 	if (ksym == XK_Tab && (xev->state & ShiftMask))        /* Shift-Tab = ISO_Left_Tab */
 		ksym = XK_ISO_Left_Tab;
-	if (ksym == XK_Escape && ctrl->menustate == STATE_ALT) {
+	if (ksym == XK_Escape) {
+		ungrab();
 		exitalt(ctrl);
-		return;
-	} else if (ksym == XK_Escape && ctrl->menustate == STATE_POPUP) {
-		/* esc closes popped up menu when current menu is the root menu */
 		removepopped(ctrl);
+		unmapprompt(ctrl->prompt);
 		return;
 	} else if (ctrl->promptopen && xev->window == ctrl->promptwin) {
 		/* pass key to prompt */
@@ -1091,12 +1105,14 @@ xevkpress(XEvent *e, struct Control *ctrl)
 		/* open prompt */
 		mapprompt(ctrl->prompt);
 		redrawprompt(ctrl->prompt);
+		ungrab();
 		exitalt(ctrl);
 		XFlush(dpy);
 		return;
 	} else if ((item = matchacc(&ctrl->accq, xev->keycode, xev->state)) != NULL) {
 		/* enter item via accelerator keychord */
 		enteritem(item);
+		ungrab();
 		exitalt(ctrl);
 		if (ctrl->menustate == STATE_POPUP) {
 			removepopped(ctrl);
@@ -1106,7 +1122,7 @@ xevkpress(XEvent *e, struct Control *ctrl)
 		ctrl->altpressed = 1;
 		XAllowEvents(dpy, ReplayKeyboard, xev->time);
 		XFlush(dpy);
-		grab(GRAB_KEYBOARD);
+		grab(GRAB_KEYBOARD | GRAB_POINTER);
 		return;
 	}
 	if ((menu = gettopmenu(ctrl)) == NULL)
@@ -1155,6 +1171,7 @@ xevkpress(XEvent *e, struct Control *ctrl)
 		promptkey(ctrl->prompt, buf, len, operation);
 		XFlush(dpy);
 	} else if (ctrl->menustate == STATE_NORMAL) {
+		ungrab();
 		exitalt(ctrl);
 	}
 }
